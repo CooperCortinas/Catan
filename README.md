@@ -33,7 +33,9 @@ For people outside your home network, you will need to host this on a reachable 
 
 ### Temporary Public Link
 
-After starting `run_online_catan.bat`, double-click `run_cloudflare_tunnel.bat`.
+Double-click `start_online_public.bat` to start both the online Catan server and the Cloudflare tunnel.
+
+Or, manually start `run_online_catan.bat`, then double-click `run_cloudflare_tunnel.bat`.
 
 It uses the bundled Cloudflare executable at:
 
