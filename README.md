@@ -12,11 +12,29 @@ Double-click `run_catan.bat`, or run:
 
 The app uses Python's built-in Tkinter UI, so no packages need to be installed.
 
+## Online Multiplayer
+
+Double-click `run_online_catan.bat`, or run:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe" online_catan.py
+```
+
+The server prints two URLs:
+
+- `http://127.0.0.1:8765` for the host computer
+- `http://YOUR_LOCAL_IP:8765` for other people on the same network
+
+Everyone opens the same URL in a browser, enters a name, and clicks `Join`. The browser version uses one master board on the host server. Each player sees the shared board, public scores, turn log, and only their own resources/development cards.
+
+For people outside your home network, you will need to host this on a reachable computer or configure router/firewall access to port `8765`.
+
 ## What Is Included
 
 - 4-player base-board mode
 - 6-player extended-board mode
 - Human hot-seat players
+- Browser-based online play from one host server
 - CPU players to fill the board
 - Randomized terrain, number tokens, ports, and robber
 - Resource labels use Brick, Wood, Sheep, Wheat, and Ore
