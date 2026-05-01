@@ -29,6 +29,18 @@ Everyone opens the same URL in a browser, enters a name, and clicks `Join`. The 
 
 For people outside your home network, you will need to host this on a reachable computer or configure router/firewall access to port `8765`.
 
+### Temporary Public Link
+
+After starting `run_online_catan.bat`, double-click `run_cloudflare_tunnel.bat`.
+
+It uses the bundled Cloudflare executable at:
+
+```text
+Cloudflare\cloudflared-windows-amd64.exe
+```
+
+Copy the generated `https://...trycloudflare.com` link and send it to other players. Keep both windows open while playing.
+
 ## What Is Included
 
 - 4-player base-board mode
