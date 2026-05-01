@@ -35,7 +35,7 @@ button,select,input{font:inherit;max-width:100%}button{border:1px solid #aeb8bd;
 .left,.right{background:#f7f7f7;border-color:#d8dee2;padding:10px;overflow:auto}.left{border-right:1px solid #d8dee2}.right{border-left:1px solid #d8dee2}
 h1{font-size:22px;margin:0 0 8px}h2{font-size:14px;margin:10px 0 6px}.small{font-size:12px;color:#5c6870}.panel{border:1px solid #d8dee2;background:#fff;padding:8px;margin:8px 0;border-radius:4px}
 main{min-width:0;min-height:0}#board{display:block;width:100%;height:100%;background:#74b8d3;touch-action:manipulation}.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:5px 0}
-.grid{display:grid;grid-template-columns:1fr auto;gap:4px 12px}.scores div{display:flex;justify-content:space-between;border-bottom:1px solid #edf0f2;padding:2px 0}
+.grid{display:grid;grid-template-columns:1fr auto;gap:4px 12px}.score-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #edf0f2;padding:3px 0}.score-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.score-row b{white-space:nowrap}
 .res{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 14px}.res b{display:inline-block;min-width:24px}.log{height:55vh;overflow:auto;white-space:pre-wrap;background:#fffaf0;border:1px solid #e0d2a7;padding:8px}
 .cards select,.trade select{width:100%;margin:3px 0}.hidden{display:none}.status{font-weight:600;margin:4px 0 8px}
 .pending{border-color:#b88a2b;background:#fff8e4}.danger{color:#a33131}.ok{color:#276b3b}
@@ -59,7 +59,7 @@ main{min-width:0;min-height:0}#board{display:block;width:100%;height:100%;backgr
 @media (max-width: 480px){
   main{height:68vh;min-height:360px}
   .res{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .scores div{font-size:13px}
+  .score-row{font-size:13px}
   #offerBox,#requestBox{grid-template-columns:1fr}
 }
 </style>
@@ -120,9 +120,11 @@ function fetchState(){fetch("/api/state?token="+encodeURIComponent(token)).then(
 function renderAll(){if(!state)return;document.getElementById('seatStatus').textContent=state.you?`${state.you.name} (${state.you.color})`:"Not joined";document.getElementById('turnStatus').textContent=state.status;
 document.getElementById('log').textContent=(state.log||[]).join("\n");document.getElementById('log').scrollTop=999999;
 for(const r of resources)document.getElementById('r-'+r).textContent=state.you?state.you.resources[r]:0;
-document.getElementById('scores').innerHTML=state.players.map(p=>`<div><span>${p.name}${p.cpu?" CPU":""}</span><b>${p.score} VP</b></div>`).join("");
+document.getElementById('scores').innerHTML=state.players.map(p=>`<div class="score-row"><span>${p.name}${p.cpu?" CPU":""}</span><b>${p.score} VP</b></div>`).join("");
 document.getElementById('startBtn').disabled=!state.you||!state.you.host||state.started;
 document.getElementById('startBtn').textContent=state.started?"Game Started":state.you&&state.you.host?"Start Game":"Host Starts Game";
+if(state.awaiting==="robber"){const robber=document.querySelector('input[name=action][value=robber]');if(robber)robber.checked=true}
+if(state.awaiting==="free_road"){const road=document.querySelector('input[name=action][value=road]');if(road)road.checked=true}
 fillSelect('bankGive',resources.map(r=>[r,labels[r]]));fillSelect('bankGet',resources.map(r=>[r,labels[r]]));document.getElementById('rates').textContent=state.you?resources.map(r=>`${labels[r]} ${state.you.rates[r]}:1`).join(" | "):"";
 fillSelect('tradeTarget',state.players.filter(p=>!state.you||p.index!==state.you.index).map(p=>[p.index,p.name]));
 fillResourceInputs('offerBox','offer');fillResourceInputs('requestBox','request');renderDev();renderPending();draw()}
