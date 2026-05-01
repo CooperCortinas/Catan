@@ -27,6 +27,8 @@ The server prints two URLs:
 
 Everyone opens the same URL in a browser, enters a name, and clicks `Join`. The browser version uses one master board on the host server. Each player sees the shared board, public scores, turn log, and only their own resources/development cards.
 
+The first person to join is the host. The host chooses CPU difficulty and clicks `Start Game`; any unclaimed seats become CPU players.
+
 For people outside your home network, you will need to host this on a reachable computer or configure router/firewall access to port `8765`.
 
 ### Temporary Public Link
@@ -48,7 +50,8 @@ Copy the generated `https://...trycloudflare.com` link and send it to other play
 - Human hot-seat players
 - Browser-based online play from one host server
 - Mobile-responsive browser layout for phones and tablets
-- CPU players to fill the board
+- CPU players to fill the board, including online lobby seats
+- Online CPU difficulty: easy, normal, or hard
 - Randomized terrain, number tokens, ports, and robber
 - Resource labels use Brick, Wood, Sheep, Wheat, and Ore
 - Terrain generation tries to spread resource types out instead of allowing heavy clumps

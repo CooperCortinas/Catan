@@ -86,6 +86,7 @@ class Player:
     name: str
     color: str
     is_cpu: bool
+    difficulty: str = "normal"
     resources: dict[str, int] = field(default_factory=lambda: {r: 0 for r in RESOURCES})
     dev_cards: list[str] = field(default_factory=list)
     new_dev_cards: list[str] = field(default_factory=list)
@@ -238,7 +239,7 @@ class CatanGame:
         playable_coords = [coord for coord, terrain in zip(coords, terrains) if TERRAIN_RESOURCE[terrain]]
         best = numbers[:]
         best_score = float("inf")
-        attempts = 1200 if len(numbers) <= 18 else 1800
+        attempts = 3500 if len(numbers) <= 18 else 6500
         for _ in range(attempts):
             candidate = numbers[:]
             random.shuffle(candidate)
@@ -751,25 +752,40 @@ class CatanGame:
         self.finish_setup_step()
 
     def cpu_take_turn(self) -> None:
+        difficulty = getattr(self.active_player(), "difficulty", "normal")
         if not self.turn_has_rolled:
             self.roll()
         if self.awaiting == "robber":
             targets = [t.hid for t in self.tiles if not t.robber]
             self.move_robber(random.choice(targets))
+        if difficulty == "easy" and random.random() < 0.35:
+            self.next_turn()
+            return
         # CPUs trade only with bank and build greedily.
-        for _ in range(4):
+        loops = 6 if difficulty == "hard" else 4
+        order = ["city", "settlement", "road", "development"] if difficulty != "easy" else ["road", "settlement", "development", "city"]
+        for _ in range(loops):
             self._cpu_trade_for_build()
-            if self._cpu_build_city():
-                continue
-            if self._cpu_build_settlement():
-                continue
-            if self._cpu_build_road():
-                continue
-            if self.buy_dev(self.current):
+            built = False
+            for target in order:
+                if target == "city" and self._cpu_build_city():
+                    built = True
+                    break
+                if target == "settlement" and self._cpu_build_settlement():
+                    built = True
+                    break
+                if target == "road" and self._cpu_build_road():
+                    built = True
+                    break
+                if target == "development" and self.buy_dev(self.current):
+                    built = True
+                    break
+            if built:
                 continue
             break
         playable = self.playable_dev_cards(self.current)
-        if playable and random.random() < 0.35:
+        chance = 0.2 if difficulty == "easy" else 0.35 if difficulty == "normal" else 0.65
+        if playable and random.random() < chance:
             self.play_dev(random.choice(playable))
             if self.awaiting == "robber":
                 self.move_robber(random.choice([t.hid for t in self.tiles if not t.robber]))

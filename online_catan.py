@@ -75,6 +75,10 @@ main{min-width:0;min-height:0}#board{display:block;width:100%;height:100%;backgr
         <select id="newPlayers"><option value="4">4 players</option><option value="6">6 players</option></select>
         <button onclick="newGame()">New Game</button>
       </div>
+      <div class="row">
+        <select id="cpuDifficulty"><option value="normal">CPU normal</option><option value="easy">CPU easy</option><option value="hard">CPU hard</option></select>
+        <button id="startBtn" onclick="startGame()">Start Game</button>
+      </div>
       <div class="small">Host this server once. Everyone joins the same board URL.</div>
     </div>
     <h2>Turn Log</h2>
@@ -111,11 +115,14 @@ function post(path,data){return fetch(path,{method:"POST",headers:{"Content-Type
 function act(data){data.token=token;post("/api/action",data).then(fetchState)}
 function newGame(){post("/api/new",{players:+document.getElementById('newPlayers').value}).then(j=>{if(j.ok){token='';localStorage.removeItem('catan_token')}fetchState()})}
 function joinGame(){post("/api/join",{name:document.getElementById('nameInput').value||"Player"}).then(j=>{if(j.ok){token=j.token;localStorage.setItem('catan_token',token)}fetchState()})}
+function startGame(){act({type:'start_game',difficulty:document.getElementById('cpuDifficulty').value})}
 function fetchState(){fetch("/api/state?token="+encodeURIComponent(token)).then(r=>r.json()).then(j=>{state=j;renderAll()}).catch(()=>{})}
 function renderAll(){if(!state)return;document.getElementById('seatStatus').textContent=state.you?`${state.you.name} (${state.you.color})`:"Not joined";document.getElementById('turnStatus').textContent=state.status;
 document.getElementById('log').textContent=(state.log||[]).join("\n");document.getElementById('log').scrollTop=999999;
 for(const r of resources)document.getElementById('r-'+r).textContent=state.you?state.you.resources[r]:0;
 document.getElementById('scores').innerHTML=state.players.map(p=>`<div><span>${p.name}${p.cpu?" CPU":""}</span><b>${p.score} VP</b></div>`).join("");
+document.getElementById('startBtn').disabled=!state.you||!state.you.host||state.started;
+document.getElementById('startBtn').textContent=state.started?"Game Started":state.you&&state.you.host?"Start Game":"Host Starts Game";
 fillSelect('bankGive',resources.map(r=>[r,labels[r]]));fillSelect('bankGet',resources.map(r=>[r,labels[r]]));document.getElementById('rates').textContent=state.you?resources.map(r=>`${labels[r]} ${state.you.rates[r]}:1`).join(" | "):"";
 fillSelect('tradeTarget',state.players.filter(p=>!state.you||p.index!==state.you.index).map(p=>[p.index,p.name]));
 fillResourceInputs('offerBox','offer');fillResourceInputs('requestBox','request');renderDev();renderPending();draw()}
@@ -162,6 +169,8 @@ class OnlineCatan:
         names = [f"Player {i + 1}" for i in range(players)]
         self.game = CatanGame(players, players, names)
         self.claims: dict[str, int] = {}
+        self.host_token: str | None = None
+        self.started = False
         self.pending_trade: dict | None = None
 
     def join(self, name: str) -> dict:
@@ -171,9 +180,11 @@ class OnlineCatan:
                 if index not in claimed:
                     token = secrets.token_urlsafe(18)
                     self.claims[token] = index
+                    if self.host_token is None:
+                        self.host_token = token
                     self.game.players[index].name = name[:20] or f"Player {index + 1}"
                     self.game.add_log(f"{self.game.players[index].name} joined seat {index + 1}.")
-                    return {"ok": True, "token": token, "player": index}
+                    return {"ok": True, "token": token, "player": index, "host": self.host_token == token}
             return {"ok": False, "error": "All seats are already claimed."}
 
     def player_for(self, token: str) -> int | None:
@@ -183,6 +194,8 @@ class OnlineCatan:
         player = self.player_for(token)
         if player is None:
             return False, "Join the game first."
+        if not self.started:
+            return False, "The host has not started the game yet."
         if player != self.game.current:
             return False, "It is not your turn."
         if self.game.winner is not None:
@@ -195,6 +208,7 @@ class OnlineCatan:
             g = self.game
             return {
                 "ok": True,
+                "started": self.started,
                 "phase": g.phase,
                 "awaiting": g.awaiting,
                 "status": self._status(),
@@ -217,6 +231,8 @@ class OnlineCatan:
     def action(self, token: str, data: dict) -> dict:
         with self.lock:
             kind = data.get("type")
+            if kind == "start_game":
+                return self.start_game(token, data.get("difficulty", "normal"))
             ok, player_or_error = self.require_turn(token)
             if not ok and kind not in ("accept_trade", "decline_trade"):
                 return {"ok": False, "error": player_or_error}
@@ -312,15 +328,49 @@ class OnlineCatan:
                 if g.awaiting:
                     return {"ok": False, "error": "Finish the pending action first."}
                 g.next_turn()
+                self.advance_cpus()
             else:
                 return {"ok": False, "error": "Unknown action."}
+            if kind not in ("end_turn",):
+                self.advance_cpus()
             return {"ok": True}
+
+    def start_game(self, token: str, difficulty: str) -> dict:
+        if token != self.host_token:
+            return {"ok": False, "error": "Only the first joined player can start the game."}
+        if self.started:
+            return {"ok": False, "error": "The game has already started."}
+        difficulty = difficulty if difficulty in ("easy", "normal", "hard") else "normal"
+        claimed = set(self.claims.values())
+        for index, player in enumerate(self.game.players):
+            if index not in claimed:
+                player.is_cpu = True
+                player.name = f"CPU {index + 1}"
+                player.difficulty = difficulty
+            else:
+                player.is_cpu = False
+        self.started = True
+        self.game.add_log(f"Game started. Empty seats filled with {difficulty} CPUs.")
+        self.advance_cpus()
+        return {"ok": True}
+
+    def advance_cpus(self) -> None:
+        guard = 0
+        while self.started and self.game.winner is None and self.game.active_player().is_cpu and guard < 24:
+            guard += 1
+            if self.game.phase.startswith("setup"):
+                self.game.cpu_take_setup()
+            else:
+                self.game.cpu_take_turn()
 
     def _clean_bundle(self, raw: dict) -> dict[str, int]:
         return {r: max(0, int(raw.get(r, 0) or 0)) for r in RESOURCES}
 
     def _status(self) -> str:
         g = self.game
+        if not self.started:
+            joined = len(self.claims)
+            return f"Lobby: {joined}/{g.player_count} players joined. First player can start and fill open seats with CPUs."
         p = g.active_player()
         if g.winner is not None:
             return f"{g.players[g.winner].name} wins."
@@ -363,6 +413,7 @@ class OnlineCatan:
             "index": viewer,
             "name": p.name,
             "color": f"Player {viewer + 1}",
+            "host": self.host_token is not None and self.claims.get(self.host_token) == viewer,
             "resources": p.resources,
             "dev_cards": cards,
             "rates": {r: g.trade_rate(viewer, r) for r in RESOURCES},
@@ -370,6 +421,8 @@ class OnlineCatan:
 
     def _legal(self, viewer: int | None) -> dict:
         if viewer is None or viewer != self.game.current:
+            return {"settlements": []}
+        if not self.started:
             return {"settlements": []}
         return {"settlements": self.game.valid_settlement_vertices(viewer)}
 
