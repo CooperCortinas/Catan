@@ -26,19 +26,42 @@ HTML = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Settlers Online</title>
 <style>
-*{box-sizing:border-box}body{margin:0;font:14px/1.35 Segoe UI,Arial,sans-serif;background:#eef3f4;color:#172026}
-button,select,input{font:inherit}button{border:1px solid #aeb8bd;background:#fff;border-radius:4px;padding:6px 10px;cursor:pointer}button:hover{background:#f3f7f8}
+*{box-sizing:border-box}html,body{min-height:100%;overscroll-behavior:none}body{margin:0;font:14px/1.35 Segoe UI,Arial,sans-serif;background:#eef3f4;color:#172026}
+button,select,input{font:inherit;max-width:100%}button{border:1px solid #aeb8bd;background:#fff;border-radius:4px;padding:6px 10px;cursor:pointer;min-height:34px}button:hover{background:#f3f7f8}
 .app{display:grid;grid-template-columns:250px minmax(520px,1fr) 330px;height:100vh;min-height:720px}
 .left,.right{background:#f7f7f7;border-color:#d8dee2;padding:10px;overflow:auto}.left{border-right:1px solid #d8dee2}.right{border-left:1px solid #d8dee2}
 h1{font-size:22px;margin:0 0 8px}h2{font-size:14px;margin:10px 0 6px}.small{font-size:12px;color:#5c6870}.panel{border:1px solid #d8dee2;background:#fff;padding:8px;margin:8px 0;border-radius:4px}
-#board{display:block;width:100%;height:100%;background:#74b8d3}.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:5px 0}
+main{min-width:0;min-height:0}#board{display:block;width:100%;height:100%;background:#74b8d3;touch-action:manipulation}.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:5px 0}
 .grid{display:grid;grid-template-columns:1fr auto;gap:4px 12px}.scores div{display:flex;justify-content:space-between;border-bottom:1px solid #edf0f2;padding:2px 0}
 .res{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 14px}.res b{display:inline-block;min-width:24px}.log{height:55vh;overflow:auto;white-space:pre-wrap;background:#fffaf0;border:1px solid #e0d2a7;padding:8px}
 .cards select,.trade select{width:100%;margin:3px 0}.hidden{display:none}.status{font-weight:600;margin:4px 0 8px}
 .pending{border-color:#b88a2b;background:#fff8e4}.danger{color:#a33131}.ok{color:#276b3b}
+@media (max-width: 820px){
+  body{font-size:15px;overflow:auto}
+  button,select,input{font-size:16px}button{min-height:42px;padding:8px 12px}
+  .app{display:flex;flex-direction:column;height:auto;min-height:100vh}
+  main{order:1;height:min(72vh,560px);min-height:430px;border-bottom:1px solid #d8dee2}
+  .right{order:2;border-left:0;border-top:1px solid #d8dee2;overflow:visible}
+  .left{order:3;border-right:0;border-top:1px solid #d8dee2;overflow:visible}
+  .left,.right{width:100%;padding:10px 10px max(10px,env(safe-area-inset-bottom))}
+  .right>h1,.left>h1{font-size:18px}
+  #turnStatus{position:sticky;top:0;z-index:2;background:#fff;border:1px solid #d8dee2;border-radius:4px;padding:8px;margin-bottom:8px}
+  .panel{margin:7px 0;padding:8px}.log{height:190px}
+  .res{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .row button{flex:1 1 120px}
+  .trade label{display:inline-block;margin:2px 4px 2px 0}
+  #offerBox,#requestBox{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
+  #offerBox input,#requestBox input{width:52px}
+}
+@media (max-width: 480px){
+  main{height:68vh;min-height:360px}
+  .res{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .scores div{font-size:13px}
+  #offerBox,#requestBox{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
@@ -97,7 +120,7 @@ fillSelect('bankGive',resources.map(r=>[r,labels[r]]));fillSelect('bankGet',reso
 fillSelect('tradeTarget',state.players.filter(p=>!state.you||p.index!==state.you.index).map(p=>[p.index,p.name]));
 fillResourceInputs('offerBox','offer');fillResourceInputs('requestBox','request');renderDev();renderPending();draw()}
 function fillSelect(id,items){const el=document.getElementById(id), cur=el.value;el.innerHTML=items.map(([v,t])=>`<option value="${v}">${t}</option>`).join("");if(items.some(i=>String(i[0])===cur))el.value=cur}
-function fillResourceInputs(id,prefix){const box=document.getElementById(id);if(box.childElementCount)return;box.innerHTML=resources.map(r=>`<label>${labels[r]} <input id="${prefix}-${r}" type="number" min="0" max="20" value="0" style="width:46px"></label>`).join(" ")}
+function fillResourceInputs(id,prefix){const box=document.getElementById(id);if(box.childElementCount)return;box.innerHTML=resources.map(r=>`<label>${labels[r]} <input id="${prefix}-${r}" type="number" inputmode="numeric" min="0" max="20" value="0" style="width:46px"></label>`).join(" ")}
 function renderDev(){const sel=document.getElementById('devSelect');let cards=(state.you&&state.you.dev_cards)||[];sel.innerHTML=cards.length?cards.map((c,i)=>`<option value="${i}">${i+1}. ${c.name}${c.playable?"":" ("+c.reason+")"}</option>`).join(""):`<option>No cards</option>`;let c=cards[sel.value]||cards[0];let box=document.getElementById('devChoices');box.innerHTML="";if(c&&c.name==="Monopoly")box.innerHTML=resourceDropdown('dev-one');if(c&&c.name==="Year of Plenty")box.innerHTML=resourceDropdown('dev-one')+resourceDropdown('dev-two')}
 document.getElementById('devSelect').addEventListener('change',renderDev);
 function resourceDropdown(id){return `<select id="${id}">${resources.map(r=>`<option value="${r}">${labels[r]}</option>`).join("")}</select>`}
@@ -108,9 +131,9 @@ function proposeTrade(){act({type:'propose_trade',target:+document.getElementByI
 function renderPending(){const p=state.pending_trade, box=document.getElementById('pendingBox');box.classList.toggle('hidden',!p);if(!p)return;document.getElementById('pendingText').textContent=`${p.from} offers ${p.offer} for ${p.request}.`}
 function respondTrade(ok){act({type:ok?'accept_trade':'decline_trade'})}
 function selectedAction(){return document.querySelector('input[name=action]:checked').value}
-function resize(){canvas.width=canvas.clientWidth;canvas.height=canvas.clientHeight;draw()}window.addEventListener('resize',resize);
+function resize(){const dpr=window.devicePixelRatio||1,w=Math.max(1,canvas.clientWidth),h=Math.max(1,canvas.clientHeight);canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);draw()}window.addEventListener('resize',resize);window.addEventListener('orientationchange',()=>setTimeout(resize,150));
 function sx(x){return x*scale+ox}function sy(y){return y*scale+oy}function wx(x){return(x-ox)/scale}function wy(y){return(y-oy)/scale}
-function draw(){if(!state||!state.board)return;ctx.clearRect(0,0,canvas.width,canvas.height);let vs=Object.values(state.board.vertices), xs=vs.map(v=>v[0]), ys=vs.map(v=>v[1]);scale=Math.min(canvas.width/(Math.max(...xs)-Math.min(...xs)+170),canvas.height/(Math.max(...ys)-Math.min(...ys)+170));ox=canvas.width/2-scale*(Math.min(...xs)+Math.max(...xs))/2;oy=canvas.height/2-scale*(Math.min(...ys)+Math.max(...ys))/2;
+function draw(){if(!state||!state.board)return;let cw=canvas.clientWidth,ch=canvas.clientHeight;ctx.clearRect(0,0,cw,ch);let vs=Object.values(state.board.vertices), xs=vs.map(v=>v[0]), ys=vs.map(v=>v[1]);scale=Math.min(cw/(Math.max(...xs)-Math.min(...xs)+170),ch/(Math.max(...ys)-Math.min(...ys)+170));ox=cw/2-scale*(Math.min(...xs)+Math.max(...xs))/2;oy=ch/2-scale*(Math.min(...ys)+Math.max(...ys))/2;
 for(const t of state.board.tiles){let pts=t.vertices.map(v=>state.board.vertices[v]);poly(pts,terrainColors[t.terrain],"#35545e",2);let c=center(t.q,t.r);ctx.fillStyle=["forest","hills","mountains"].includes(t.terrain)?"white":"#222";ctx.font="bold 13px Segoe UI";ctx.textAlign="center";ctx.fillText(t.label,sx(c[0]),sy(c[1])-12);if(t.number){ctx.beginPath();ctx.fillStyle="#f7efd5";ctx.strokeStyle="#5c4934";ctx.ellipse(sx(c[0]),sy(c[1])+18,18,20,0,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle=[6,8].includes(t.number)?"#b21f24":"#222";ctx.font="bold 16px Segoe UI";ctx.fillText(t.number,sx(c[0]),sy(c[1])+17);for(let i=0;i<t.dots;i++){let dx=(i-(t.dots-1)/2)*5;ctx.beginPath();ctx.arc(sx(c[0])+dx,sy(c[1])+31,2,0,Math.PI*2);ctx.fill()}}if(t.robber){ctx.fillStyle="#111";ctx.fillRect(sx(c[0])-8,sy(c[1])-10,16,24);ctx.beginPath();ctx.arc(sx(c[0]),sy(c[1])-18,11,0,Math.PI*2);ctx.fill()}}
 for(const e of state.board.edges){if(e.owner===null)continue;let a=state.board.vertices[e.a],b=state.board.vertices[e.b];ctx.strokeStyle=playerColors[e.owner];ctx.lineWidth=6;ctx.lineCap="round";line(a,b)}
 for(const p of state.board.ports){let v=state.board.vertices[p.v];ctx.beginPath();ctx.fillStyle="#e8f2ff";ctx.strokeStyle="#225d78";ctx.lineWidth=2;ctx.arc(sx(v[0]),sy(v[1]),14,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle="#111";ctx.font="bold 11px Segoe UI";ctx.fillText(p.label,sx(v[0]),sy(v[1])+4)}

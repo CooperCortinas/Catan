@@ -35,6 +35,7 @@ For people outside your home network, you will need to host this on a reachable 
 - 6-player extended-board mode
 - Human hot-seat players
 - Browser-based online play from one host server
+- Mobile-responsive browser layout for phones and tablets
 - CPU players to fill the board
 - Randomized terrain, number tokens, ports, and robber
 - Resource labels use Brick, Wood, Sheep, Wheat, and Ore
