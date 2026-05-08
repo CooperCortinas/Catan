@@ -516,20 +516,27 @@ class CatanGame:
                 p.resources[random.choice(choices)] -= 1
             self.add_log(f"{p.name} discarded {discards} cards.")
 
-    def move_robber(self, hid: int) -> None:
+    def robber_victims(self, hid: int) -> list[int]:
+        victims = sorted({self.buildings[v].owner for v in self.tiles[hid].vertices if v in self.buildings and self.buildings[v].owner != self.current})
+        return [i for i in victims if self.players[i].resource_count() > 0]
+
+    def move_robber(self, hid: int, victim: int | None = None) -> bool:
+        victims = self.robber_victims(hid)
+        if victims and victim is not None and victim not in victims:
+            return False
         for t in self.tiles:
             t.robber = False
         self.tiles[hid].robber = True
-        victims = sorted({self.buildings[v].owner for v in self.tiles[hid].vertices if v in self.buildings and self.buildings[v].owner != self.current})
-        victims = [i for i in victims if self.players[i].resource_count() > 0]
         if victims:
-            victim = random.choice(victims)
+            if victim is None:
+                victim = random.choice(victims)
             choices = [r for r, n in self.players[victim].resources.items() if n > 0]
             resource = random.choice(choices)
             self.players[victim].resources[resource] -= 1
             self.players[self.current].resources[resource] += 1
             self.add_log(f"{self.active_player().name} stole from {self.players[victim].name}.")
         self.awaiting = None
+        return True
 
     def buy_dev(self, player_index: int) -> bool:
         p = self.players[player_index]
@@ -1252,6 +1259,32 @@ class CatanApp(tk.Tk):
             return False
         return True
 
+    def _choose_robber_victim(self, hid: int) -> int | None:
+        if not self.game:
+            return None
+        victims = self.game.robber_victims(hid)
+        if len(victims) <= 1:
+            return victims[0] if victims else None
+        window = tk.Toplevel(self.root)
+        window.title("Robber")
+        window.transient(self.root)
+        window.grab_set()
+        frame = ttk.Frame(window, padding=14)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Steal from which player?", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
+        names = [self.game.players[i].name for i in victims]
+        selected = tk.StringVar(value=names[0])
+        ttk.Combobox(frame, textvariable=selected, values=names, state="readonly", width=22).pack(fill="x")
+        result: dict[str, int | None] = {"victim": None}
+
+        def confirm() -> None:
+            result["victim"] = victims[names.index(selected.get())]
+            window.destroy()
+
+        ttk.Button(frame, text="Steal", command=confirm).pack(fill="x", pady=(10, 0))
+        window.wait_window()
+        return result["victim"]
+
     def _click_canvas(self, event) -> None:
         if not self._guard_human_turn() or not self.game:
             return
@@ -1270,10 +1303,16 @@ class CatanApp(tk.Tk):
                     self.game.add_log("Road Building complete.")
             else:
                 messagebox.showinfo("Road Building", "Choose a legal road edge for your free road.")
-        elif self.game.awaiting == "robber" or action == "robber":
+        elif self.game.awaiting == "robber":
             hid = self._nearest_hex(x, y)
             if hid is not None:
-                self.game.move_robber(hid)
+                victims = self.game.robber_victims(hid)
+                victim = self._choose_robber_victim(hid)
+                if len(victims) > 1 and victim is None:
+                    return
+                self.game.move_robber(hid, victim)
+        elif action == "robber":
+            messagebox.showinfo("Robber", "You can only move the robber after rolling a 7 or playing a Knight.")
         elif action == "settlement":
             v = self._nearest_vertex(x, y)
             if v is not None and not self.game.place_settlement(self.game.current, v):

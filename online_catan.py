@@ -37,6 +37,7 @@ h1{font-size:22px;margin:0 0 8px}h2{font-size:14px;margin:10px 0 6px}.small{font
 main{min-width:0;min-height:0}#board{display:block;width:100%;height:100%;background:#74b8d3;touch-action:manipulation}.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:5px 0}
 .grid{display:grid;grid-template-columns:1fr auto;gap:4px 12px}.score-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #edf0f2;padding:3px 0}.score-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.score-row b{white-space:nowrap}
 .res{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 14px}.res b{display:inline-block;min-width:24px}.log{height:55vh;overflow:auto;white-space:pre-wrap;background:#fffaf0;border:1px solid #e0d2a7;padding:8px}
+.cost-card{display:grid;grid-template-columns:auto 1fr;gap:4px 10px}.cost-card b{white-space:nowrap}.cost-card span{min-width:0}
 .cards select,.trade select{width:100%;margin:3px 0}.hidden{display:none}.status{font-weight:600;margin:4px 0 8px}
 .pending{border-color:#b88a2b;background:#fff8e4}.danger{color:#a33131}.ok{color:#276b3b}
 @media (max-width: 820px){
@@ -99,6 +100,7 @@ main{min-width:0;min-height:0}#board{display:block;width:100%;height:100%;backgr
       <label><input type="radio" name="action" value="robber"> Move Robber</label>
     </div>
     <div class="panel res"><h2 style="grid-column:1/-1">Your Resources</h2><div>Brick <b id="r-brick">0</b></div><div>Wood <b id="r-lumber">0</b></div><div>Sheep <b id="r-wool">0</b></div><div>Wheat <b id="r-grain">0</b></div><div>Ore <b id="r-ore">0</b></div></div>
+    <div class="panel"><h2>Build Cost Card</h2><div class="cost-card" id="costCard"></div></div>
     <div class="panel cards"><h2>Development Cards</h2><select id="devSelect"></select><div id="devChoices"></div><button onclick="playDev()">Play Selected</button><button onclick="act({type:'buy_dev'})">Buy Development Card</button></div>
     <div class="panel trade"><h2>Bank / Harbor</h2><select id="bankGive"></select><select id="bankGet"></select><button onclick="bankTrade()">Trade</button><div class="small" id="rates"></div></div>
     <div class="panel trade"><h2>Player Trade</h2><select id="tradeTarget"></select><div class="small">You give</div><div id="offerBox"></div><div class="small">You get</div><div id="requestBox"></div><button onclick="proposeTrade()">Propose</button></div>
@@ -107,14 +109,15 @@ main{min-width:0;min-height:0}#board{display:block;width:100%;height:100%;backgr
 </div>
 <script>
 const canvas=document.getElementById('board'), ctx=canvas.getContext('2d');
-let state=null, token=localStorage.getItem('catan_token')||'', scale=1, ox=0, oy=0, hoverBuilding=null, devSignature="";
+let state=null, token=localStorage.getItem('catan_token')||'', scale=1, ox=0, oy=0, hoverBuilding=null, devSignature="", pendingTradeSignature="";
 const resources=["brick","lumber","wool","grain","ore"], labels={brick:"Brick",lumber:"Wood",wool:"Sheep",grain:"Wheat",ore:"Ore"};
+const buildCosts=[["Road",{brick:1,lumber:1}],["Settlement",{brick:1,lumber:1,wool:1,grain:1}],["City",{grain:2,ore:3}],["Development Card",{wool:1,grain:1,ore:1}]];
 const terrainColors={hills:"#b7683f",forest:"#2f7d4a",pasture:"#80b855",fields:"#d7bd48",mountains:"#8a8d91",desert:"#d7b977"};
 const playerColors=["#d63a2f","#f5f2e7","#2874d0","#ef8f28","#2f9e59","#8a5a35"];
 function post(path,data){return fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}).then(r=>r.json()).then(j=>{if(!j.ok)alert(j.error||"Action failed");return j})}
 function act(data){data.token=token;post("/api/action",data).then(fetchState)}
 function newGame(){post("/api/new",{players:+document.getElementById('newPlayers').value}).then(j=>{if(j.ok){token='';localStorage.removeItem('catan_token')}fetchState()})}
-function joinGame(){post("/api/join",{name:document.getElementById('nameInput').value||"Player"}).then(j=>{if(j.ok){token=j.token;localStorage.setItem('catan_token',token)}fetchState()})}
+function joinGame(){post("/api/join",{name:document.getElementById('nameInput').value||"Player",token}).then(j=>{if(j.ok){token=j.token;localStorage.setItem('catan_token',token)}fetchState()})}
 function startGame(){act({type:'start_game',difficulty:document.getElementById('cpuDifficulty').value})}
 function fetchState(){fetch("/api/state?token="+encodeURIComponent(token)).then(r=>r.json()).then(j=>{state=j;renderAll()}).catch(()=>{})}
 function renderAll(){if(!state)return;document.getElementById('seatStatus').textContent=state.you?`${state.you.name} (${state.you.color})`:"Not joined";document.getElementById('turnStatus').textContent=state.status;
@@ -127,9 +130,10 @@ if(state.awaiting==="robber"){const robber=document.querySelector('input[name=ac
 if(state.awaiting==="free_road"){const road=document.querySelector('input[name=action][value=road]');if(road)road.checked=true}
 fillSelect('bankGive',resources.map(r=>[r,labels[r]]));fillSelect('bankGet',resources.map(r=>[r,labels[r]]));document.getElementById('rates').textContent=state.you?resources.map(r=>`${labels[r]} ${state.you.rates[r]}:1`).join(" | "):"";
 fillSelect('tradeTarget',state.players.filter(p=>!state.you||p.index!==state.you.index).map(p=>[p.index,p.name]));
-fillResourceInputs('offerBox','offer');fillResourceInputs('requestBox','request');renderDev();renderPending();draw()}
+fillResourceInputs('offerBox','offer');fillResourceInputs('requestBox','request');renderCostCard();renderDev();renderPending();draw()}
 function fillSelect(id,items){const el=document.getElementById(id), cur=el.value;el.innerHTML=items.map(([v,t])=>`<option value="${v}">${t}</option>`).join("");if(items.some(i=>String(i[0])===cur))el.value=cur}
 function fillResourceInputs(id,prefix){const box=document.getElementById(id);if(box.childElementCount)return;box.innerHTML=resources.map(r=>`<label>${labels[r]} <input id="${prefix}-${r}" type="number" inputmode="numeric" min="0" max="20" value="0" style="width:46px"></label>`).join(" ")}
+function renderCostCard(){const box=document.getElementById('costCard');if(box.childElementCount)return;box.innerHTML=buildCosts.map(([name,cost])=>`<b>${name}</b><span>${resources.filter(r=>cost[r]).map(r=>`${cost[r]} ${labels[r]}`).join(", ")}</span>`).join("")}
 function renderDev(){const sel=document.getElementById('devSelect');let cards=(state.you&&state.you.dev_cards)||[], sig=cards.map((c,i)=>`${i}:${c.name}:${c.playable}:${c.reason}`).join("|"), previous=sel.value;if(sig!==devSignature){sel.innerHTML=cards.length?cards.map((c,i)=>`<option value="${i}">${i+1}. ${c.name}${c.playable?"":" ("+c.reason+")"}</option>`).join(""):`<option value="">No cards</option>`;devSignature=sig;if([...sel.options].some(o=>o.value===previous))sel.value=previous}let c=cards[sel.value]||cards[0];let box=document.getElementById('devChoices');let need=c?c.name:"";if(box.dataset.card===need)return;box.dataset.card=need;box.innerHTML="";if(c&&c.name==="Monopoly")box.innerHTML=resourceDropdown('dev-one','Choose resource');if(c&&c.name==="Year of Plenty")box.innerHTML=resourceDropdown('dev-one','First resource')+resourceDropdown('dev-two','Second resource')}
 document.getElementById('devSelect').addEventListener('change',renderDev);
 function resourceDropdown(id,prompt){return `<select id="${id}"><option value="">${prompt}</option>${resources.map(r=>`<option value="${r}">${labels[r]}</option>`).join("")}</select>`}
@@ -137,7 +141,7 @@ function playDev(){let cards=(state.you&&state.you.dev_cards)||[], c=cards[docum
 function bankTrade(){act({type:'bank_trade',give:document.getElementById('bankGive').value,get:document.getElementById('bankGet').value})}
 function bundle(prefix){let b={};for(const r of resources)b[r]=+(document.getElementById(prefix+'-'+r)?.value||0);return b}
 function proposeTrade(){act({type:'propose_trade',target:+document.getElementById('tradeTarget').value,offer:bundle('offer'),request:bundle('request')})}
-function renderPending(){const p=state.pending_trade, box=document.getElementById('pendingBox');box.classList.toggle('hidden',!p);if(!p)return;document.getElementById('pendingText').textContent=`${p.from} offers ${p.offer} for ${p.request}.`}
+function renderPending(){const p=state.pending_trade, box=document.getElementById('pendingBox');box.classList.toggle('hidden',!p);if(!p){pendingTradeSignature="";return}let text=`${p.from} offers ${p.offer} for ${p.request}.`;document.getElementById('pendingText').textContent=text;let sig=`${p.from}|${p.offer}|${p.request}`;if(sig!==pendingTradeSignature){pendingTradeSignature=sig;alert(`Trade proposed\n\n${text}`)}}
 function respondTrade(ok){act({type:ok?'accept_trade':'decline_trade'})}
 function selectedAction(){return document.querySelector('input[name=action]:checked').value}
 function resize(){const dpr=window.devicePixelRatio||1,w=Math.max(1,canvas.clientWidth),h=Math.max(1,canvas.clientHeight);canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);draw()}window.addEventListener('resize',resize);window.addEventListener('orientationchange',()=>setTimeout(resize,150));
@@ -160,7 +164,8 @@ function nearestHex(x,y){let best=null,bd=1e9;for(const t of state.board.tiles){
 function distSeg(px,py,a,b){let dx=b[0]-a[0],dy=b[1]-a[1],t=Math.max(0,Math.min(1,((px-a[0])*dx+(py-a[1])*dy)/(dx*dx+dy*dy)));let x=a[0]+t*dx,y=a[1]+t*dy;return(x-px)**2+(y-py)**2}
 canvas.addEventListener('pointermove',ev=>{if(!state)return;let r=canvas.getBoundingClientRect(),x=wx(ev.clientX-r.left),y=wy(ev.clientY-r.top),b=nearestBuilding(x,y);if(b!==hoverBuilding){hoverBuilding=b;draw()}});
 canvas.addEventListener('pointerleave',()=>{if(hoverBuilding!==null){hoverBuilding=null;draw()}});
-canvas.addEventListener('click',ev=>{if(!state||!state.you)return;let r=canvas.getBoundingClientRect(),x=wx(ev.clientX-r.left),y=wy(ev.clientY-r.top),a=selectedAction();hoverBuilding=nearestBuilding(x,y);if(state.phase==="setup_settlement"||a==="settlement")act({type:'settlement',vertex:nearestVertex(x,y)});else if(state.phase==="setup_road"||a==="road"||state.awaiting==="free_road"){let e=nearestEdge(x,y);if(e)act({type:'road',edge:e})}else if(a==="city")act({type:'city',vertex:nearestVertex(x,y)});else if(a==="robber"||state.awaiting==="robber")act({type:'robber',hex:nearestHex(x,y)});draw()});
+function chooseRobberVictim(hex){let victims=(state.robber_targets&&state.robber_targets[hex])||[];if(victims.length===0)return null;if(victims.length===1)return victims[0].index;let options=victims.map((v,i)=>`${i+1}. ${v.name}`).join("\n"), pick=prompt(`Steal from which player?\n${options}`,"1");if(pick===null)return undefined;let index=+pick-1;if(!Number.isInteger(index)||index<0||index>=victims.length){alert("Choose one of the listed players.");return undefined}return victims[index].index}
+canvas.addEventListener('click',ev=>{if(!state||!state.you)return;let r=canvas.getBoundingClientRect(),x=wx(ev.clientX-r.left),y=wy(ev.clientY-r.top),a=selectedAction();hoverBuilding=nearestBuilding(x,y);if(state.phase==="setup_settlement"||a==="settlement")act({type:'settlement',vertex:nearestVertex(x,y)});else if(state.phase==="setup_road"||a==="road"||state.awaiting==="free_road"){let e=nearestEdge(x,y);if(e)act({type:'road',edge:e})}else if(a==="city")act({type:'city',vertex:nearestVertex(x,y)});else if(state.awaiting==="robber"){let hex=nearestHex(x,y),victim=chooseRobberVictim(hex);if(victim!==undefined)act({type:'robber',hex,victim})}else if(a==="robber")alert("You can only move the robber after rolling a 7 or playing a Knight.");draw()});
 resize();fetchState();setInterval(fetchState,1000);
 </script>
 </body>
@@ -180,8 +185,13 @@ class OnlineCatan:
         self.started = False
         self.pending_trade: dict | None = None
 
-    def join(self, name: str) -> dict:
+    def join(self, name: str, token: str = "") -> dict:
         with self.lock:
+            if token in self.claims:
+                index = self.claims[token]
+                self.game.players[index].name = name[:20] or f"Player {index + 1}"
+                self.game.add_log(f"{self.game.players[index].name} updated seat {index + 1}.")
+                return {"ok": True, "token": token, "player": index, "host": self.host_token == token}
             claimed = set(self.claims.values())
             for index in range(self.game.player_count):
                 if index not in claimed:
@@ -232,6 +242,7 @@ class OnlineCatan:
                 "you": self._you(viewer) if viewer is not None else None,
                 "board": self._board(),
                 "legal": self._legal(viewer),
+                "robber_targets": self._robber_targets(viewer),
                 "pending_trade": self._pending_for(viewer),
             }
 
@@ -285,9 +296,11 @@ class OnlineCatan:
                 if not g.place_city(player, int(data.get("vertex"))):
                     return {"ok": False, "error": "That city is not legal or affordable."}
             elif kind == "robber":
-                if g.awaiting != "robber" and data.get("type") != "robber":
+                if g.awaiting != "robber":
                     return {"ok": False, "error": "You are not moving the robber now."}
-                g.move_robber(int(data.get("hex")))
+                victim = data.get("victim")
+                if not g.move_robber(int(data.get("hex")), int(victim) if victim is not None else None):
+                    return {"ok": False, "error": "Choose a player touching that hex to steal from."}
             elif kind == "buy_dev":
                 if not g.buy_dev(player):
                     return {"ok": False, "error": "You cannot buy a development card."}
@@ -485,6 +498,14 @@ class OnlineCatan:
             return {"settlements": []}
         return {"settlements": self.game.valid_settlement_vertices(viewer)}
 
+    def _robber_targets(self, viewer: int | None) -> dict[str, list[dict]]:
+        if viewer is None or viewer != self.game.current or not self.started:
+            return {}
+        return {
+            str(tile.hid): [{"index": i, "name": self.game.players[i].name} for i in self.game.robber_victims(tile.hid)]
+            for tile in self.game.tiles
+        }
+
     def _pending_for(self, viewer: int | None) -> dict | None:
         if viewer is None or not self.pending_trade or self.pending_trade["to"] != viewer:
             return None
@@ -548,7 +569,7 @@ class Handler(BaseHTTPRequestHandler):
                 APP.reset(players)
             self._json({"ok": True})
         elif self.path == "/api/join":
-            self._json(APP.join(data.get("name", "Player")))
+            self._json(APP.join(data.get("name", "Player"), data.get("token", "")))
         elif self.path == "/api/action":
             self._json(APP.action(data.get("token", ""), data))
         else:
