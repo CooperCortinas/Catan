@@ -1,89 +1,108 @@
-# Settlers Offline
+# Settlers Online
 
-A fully offline local desktop board-game app inspired by the classic island-settlement ruleset.
+A local Python board-game app inspired by classic island-settlement rules. The main way to play is the browser-based online version hosted from one computer. A desktop Tkinter version is still included as an option.
 
-## Run
+## Quick Start
 
-Double-click `run_catan.bat`, or run:
+Double-click:
+
+```text
+start_online_public.bat
+```
+
+Choose an option:
+
+```text
+1. Start online public game
+2. Start desktop game
+3. Start online server only
+4. Start Cloudflare tunnel only
+```
+
+Option `1` starts the online server and a Cloudflare tunnel in two command windows. Keep both windows open while playing.
+
+## Public Online Game
+
+After choosing option `1`, the Cloudflare window prints a temporary public `https://...trycloudflare.com` link. Send that link to the players.
+
+Players open the link in a browser, enter a name, and click `Join`. Each browser can only claim one team/seat. If the same browser clicks `Join` again, it updates that same seat instead of taking another one.
+
+The first person to join is the host. The host chooses 4 or 6 players, chooses CPU difficulty, and clicks `Start Game`. Empty seats become CPU players.
+
+## Local Network Only
+
+Choose option `3` to start only the online server. It prints local URLs:
+
+```text
+http://127.0.0.1:8765
+http://YOUR_LOCAL_IP:8765
+```
+
+Use the local IP URL for players on the same network.
+
+## Spectator Mode
+
+Use `Spectate` to watch without claiming a team. This is useful for a TV or shared display.
+
+Spectators can see the public board, scores, log, current turn, and winner popup. They do not see private resources or development cards.
+
+## Desktop Game
+
+Choose option `2` in `start_online_public.bat` to run the desktop Tkinter version:
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe" catan_app.py
 ```
 
-The app uses Python's built-in Tkinter UI, so no packages need to be installed.
+No extra packages are required.
 
-## Online Multiplayer
+## Gameplay Features
 
-Double-click `run_online_catan.bat`, or run:
-
-```powershell
-& "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe" online_catan.py
-```
-
-The server prints two URLs:
-
-- `http://127.0.0.1:8765` for the host computer
-- `http://YOUR_LOCAL_IP:8765` for other people on the same network
-
-Everyone opens the same URL in a browser, enters a name, and clicks `Join`. The browser version uses one master board on the host server. Each player sees the shared board, public scores, turn log, and only their own resources/development cards.
-
-The first person to join is the host. The host chooses CPU difficulty and clicks `Start Game`; any unclaimed seats become CPU players.
-
-For people outside your home network, you will need to host this on a reachable computer or configure router/firewall access to port `8765`.
-
-### Temporary Public Link
-
-Double-click `start_online_public.bat` to start both the online Catan server and the Cloudflare tunnel.
-
-Or, manually start `run_online_catan.bat`, then double-click `run_cloudflare_tunnel.bat`.
-
-It uses the bundled Cloudflare executable at:
-
-```text
-Cloudflare\cloudflared-windows-amd64.exe
-```
-
-Copy the generated `https://...trycloudflare.com` link and send it to other players. Keep both windows open while playing.
-
-## What Is Included
-
-- 4-player base-board mode
-- 6-player extended-board mode
-- Human hot-seat players
-- Browser-based online play from one host server
-- Mobile-responsive browser layout for phones and tablets
-- CPU players to fill the board, including online lobby seats
-- Online CPU difficulty: easy, normal, or hard
-- Randomized terrain, number tokens, ports, and robber
-- Resource labels use Brick, Wood, Sheep, Wheat, and Ore
-- Terrain generation tries to spread resource types out instead of allowing heavy clumps
-- Number-token generation spreads high-probability numbers out and prevents adjacent 6/8 tiles
-- Number tokens show probability dots like the physical board game
-- Setup phase with snake-order initial settlement and road placement
+- 4-player base board and 6-player extended board
+- Browser-based multiplayer from one host computer
+- Optional public link through bundled Cloudflare tunnel
+- Spectator mode for TV/shared displays
+- CPU players for empty seats
+- CPU difficulty: easy, normal, hard
+- Randomized terrain, numbers, ports, and robber
+- Resource names: Brick, Wood, Sheep, Wheat, Ore
+- Setup phase with snake-order settlement and road placement
 - Dice production, robber on 7, discard over 7 cards, and stealing
+- Robber movement only after rolling a 7 or playing a Knight
+- Robber steal target chosen from a dropdown when multiple players can be stolen from
 - Roads, settlements, cities, bank/harbor trades, and development cards
-- Player-to-player trade offers with human accept/decline and simple CPU acceptance
-- Build-cost reference card popup
-- Development card dropdown showing playable and currently unplayable cards
+- Player trades with human accept/decline and CPU decisions
+- Trade popup when another player proposes a trade to you
+- Trade privacy: invalid human trade requests auto-decline after a short delay instead of revealing card counts
+- Player trades require at least one resource from each side
+- Build-cost reference card in the online UI
+- Development-card dropdown showing playable and currently unplayable cards
 - Monopoly and Year of Plenty use dropdown resource selection
 - Road Building lets human players place two free roads manually
-- Settlement/city hover highlights that show the exact spot and port
-- Public scoreboard hides other players' unrevealed Victory Point development cards
-- CPU trade acceptance considers resource needs, scarcity, harbor rates, and score position
+- Settlement/city hover highlights touching hexes and port details
+- Public scores hide other players' unrevealed Victory Point development cards
 - Longest Road, Largest Army, hidden Victory Point cards, and 10 VP win condition
+- Winner popup when the game ends
+- Player names use board-color swatches in the online UI
 
-## Controls
+## Online Controls
 
-1. Choose 4-player or 6-player mode.
-2. Choose how many humans are playing. Empty seats become CPUs.
-3. During setup, click an intersection for your settlement, then click an adjacent edge for your road.
-4. During normal play, roll first, then choose an action in the right panel and click the board.
-5. Read turn history in the log panel on the left.
-6. Use `Build Cost Card` to view purchase costs and your current bank/harbor rates.
-7. Use `Trade With Player` after rolling to offer resources to another player.
-8. Use `Play Development Card` to view all development cards and play eligible ones.
-9. After playing Road Building, click two legal road edges to place the free roads.
-10. Hover over a settlement or city to highlight the touching hexes and show the spot details.
-11. Use `End Turn` when you are finished.
+1. Open the game link in a browser.
+2. Click `Join` to play, or `Spectate` to watch.
+3. The host starts the game after choosing board size and CPU difficulty.
+4. During setup, click an intersection for your settlement, then click an adjacent edge for your road.
+5. During normal play, click `Roll`, choose an action, then click the board.
+6. Use `Player Trade` to offer resources to another player.
+7. Use `Bank / Harbor` for bank and port trades.
+8. Use `Development Cards` to buy or play development cards.
+9. Use the build-cost card to check purchase costs.
+10. Click `End Turn` when finished.
+
+## Files
+
+- `start_online_public.bat`: the only launcher batch file
+- `online_catan.py`: browser multiplayer server and UI
+- `catan_app.py`: shared game logic and desktop Tkinter app
+- `Cloudflare\cloudflared-windows-amd64.exe`: bundled tunnel executable
 
 This project uses original UI and visual styling. It does not include official board-game artwork, names, logos, or rulebook text.
