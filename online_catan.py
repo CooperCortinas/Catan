@@ -6,6 +6,7 @@ import math
 import secrets
 import socket
 import threading
+import time
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -15,6 +16,7 @@ from catan_app import (
     CatanGame,
     LABEL_TO_RESOURCE,
     NUMBER_DOTS,
+    PLAYER_COLOR_NAMES,
     RESOURCE_LABELS,
     RESOURCES,
     TERRAIN_LABELS,
@@ -39,7 +41,8 @@ main{min-width:0;min-height:0}#board{display:block;width:100%;height:100%;backgr
 .res{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 14px}.res b{display:inline-block;min-width:24px}.log{height:55vh;overflow:auto;white-space:pre-wrap;background:#fffaf0;border:1px solid #e0d2a7;padding:8px}
 .cost-card{display:grid;grid-template-columns:auto 1fr;gap:4px 10px}.cost-card b{white-space:nowrap}.cost-card span{min-width:0}
 .cards select,.trade select{width:100%;margin:3px 0}.hidden{display:none}.status{font-weight:600;margin:4px 0 8px}
-.pending{border-color:#b88a2b;background:#fff8e4}.danger{color:#a33131}.ok{color:#276b3b}
+.pending{border-color:#b88a2b;background:#fff8e4}.danger{color:#a33131}.ok{color:#276b3b}.swatch{display:inline-block;width:.85em;height:.85em;border:1px solid #222;margin-right:5px;vertical-align:-.08em}
+.robber-choice select{width:100%;margin:4px 0 8px}
 @media (max-width: 820px){
   body{font-size:15px;overflow:auto}
   button,select,input{font-size:16px}button{min-height:42px;padding:8px 12px}
@@ -71,7 +74,7 @@ main{min-width:0;min-height:0}#board{display:block;width:100%;height:100%;backgr
     <h1>Settlers Online</h1>
     <div class="panel">
       <div class="status" id="seatStatus">Not joined</div>
-      <div class="row"><input id="nameInput" placeholder="Your name" style="width:135px"><button onclick="joinGame()">Join</button></div>
+      <div class="row"><input id="nameInput" placeholder="Your name" style="width:135px"><button onclick="joinGame()">Join</button><button onclick="spectateGame()">Spectate</button></div>
       <div class="row">
         <select id="newPlayers"><option value="4">4 players</option><option value="6">6 players</option></select>
         <button onclick="newGame()">New Game</button>
@@ -104,34 +107,44 @@ main{min-width:0;min-height:0}#board{display:block;width:100%;height:100%;backgr
     <div class="panel cards"><h2>Development Cards</h2><select id="devSelect"></select><div id="devChoices"></div><button onclick="playDev()">Play Selected</button><button onclick="act({type:'buy_dev'})">Buy Development Card</button></div>
     <div class="panel trade"><h2>Bank / Harbor</h2><select id="bankGive"></select><select id="bankGet"></select><button onclick="bankTrade()">Trade</button><div class="small" id="rates"></div></div>
     <div class="panel trade"><h2>Player Trade</h2><select id="tradeTarget"></select><div class="small">You give</div><div id="offerBox"></div><div class="small">You get</div><div id="requestBox"></div><button onclick="proposeTrade()">Propose</button></div>
+    <div class="panel robber-choice hidden" id="robberBox"><h2>Robber</h2><div class="small">Choose who to steal from</div><select id="robberVictim"></select><div class="row"><button onclick="confirmRobberVictim()">Steal</button><button onclick="cancelRobberVictim()">Cancel</button></div></div>
     <div class="panel pending hidden" id="pendingBox"><h2>Pending Trade</h2><div id="pendingText"></div><div class="row"><button onclick="respondTrade(true)">Accept</button><button onclick="respondTrade(false)">Decline</button></div></div>
   </aside>
 </div>
 <script>
 const canvas=document.getElementById('board'), ctx=canvas.getContext('2d');
-let state=null, token=localStorage.getItem('catan_token')||'', scale=1, ox=0, oy=0, hoverBuilding=null, devSignature="", pendingTradeSignature="";
+let spectatorMode=localStorage.getItem('catan_spectator')==="1";
+let state=null, token=spectatorMode?"":localStorage.getItem('catan_token')||'', scale=1, ox=0, oy=0, hoverBuilding=null, devSignature="", pendingTradeSignature="", winnerSignature="", pendingRobberHex=null;
 const resources=["brick","lumber","wool","grain","ore"], labels={brick:"Brick",lumber:"Wood",wool:"Sheep",grain:"Wheat",ore:"Ore"};
 const buildCosts=[["Road",{brick:1,lumber:1}],["Settlement",{brick:1,lumber:1,wool:1,grain:1}],["City",{grain:2,ore:3}],["Development Card",{wool:1,grain:1,ore:1}]];
 const terrainColors={hills:"#b7683f",forest:"#2f7d4a",pasture:"#80b855",fields:"#d7bd48",mountains:"#8a8d91",desert:"#d7b977"};
 const playerColors=["#d63a2f","#f5f2e7","#2874d0","#ef8f28","#2f9e59","#8a5a35"];
 function post(path,data){return fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}).then(r=>r.json()).then(j=>{if(!j.ok)alert(j.error||"Action failed");return j})}
 function act(data){data.token=token;post("/api/action",data).then(fetchState)}
-function newGame(){post("/api/new",{players:+document.getElementById('newPlayers').value}).then(j=>{if(j.ok){token='';localStorage.removeItem('catan_token')}fetchState()})}
-function joinGame(){post("/api/join",{name:document.getElementById('nameInput').value||"Player",token}).then(j=>{if(j.ok){token=j.token;localStorage.setItem('catan_token',token)}fetchState()})}
+function newGame(){post("/api/new",{players:+document.getElementById('newPlayers').value}).then(j=>{if(j.ok){token='';spectatorMode=false;localStorage.removeItem('catan_token');localStorage.removeItem('catan_spectator')}fetchState()})}
+function joinGame(){spectatorMode=false;localStorage.removeItem('catan_spectator');post("/api/join",{name:document.getElementById('nameInput').value||"Player",token}).then(j=>{if(j.ok){token=j.token;localStorage.setItem('catan_token',token)}fetchState()})}
+function spectateGame(){token='';spectatorMode=true;localStorage.removeItem('catan_token');localStorage.setItem('catan_spectator','1');fetchState()}
 function startGame(){act({type:'start_game',difficulty:document.getElementById('cpuDifficulty').value})}
 function fetchState(){fetch("/api/state?token="+encodeURIComponent(token)).then(r=>r.json()).then(j=>{state=j;renderAll()}).catch(()=>{})}
-function renderAll(){if(!state)return;document.getElementById('seatStatus').textContent=state.you?`${state.you.name} (${state.you.color})`:"Not joined";document.getElementById('turnStatus').textContent=state.status;
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function nameHtml(p){return `<span class="swatch" style="background:${p.color_hex}"></span><span>${esc(p.name)}</span>${p.cpu?" CPU":""}`}
+function playerLabel(p){return `${p.name}${p.cpu?" CPU":""}`}
+function renderStatus(){const box=document.getElementById('turnStatus');if(!state.started||!state.players[state.current]){box.textContent=state.status;return}let p=state.winner?state.players[state.winner.index]:state.players[state.current], suffix="";if(state.winner)suffix=" wins.";else if(state.phase==="setup_settlement")suffix=": place a starting settlement.";else if(state.phase==="setup_road")suffix=": place a road touching that settlement.";else if(state.awaiting==="robber")suffix=": move the robber.";else if(state.awaiting==="free_road")suffix=`: place ${state.free_roads_remaining||""} free road(s).`;else suffix="'s turn. "+(state.status.includes("Roll the dice")?"Roll the dice.":"Trade, build, play a card, or end turn.");box.innerHTML=nameHtml(p)+esc(suffix)}
+function renderAll(){if(!state)return;document.getElementById('seatStatus').innerHTML=state.you?`${nameHtml(state.you)}`:spectatorMode?"Spectating":"Not joined";renderStatus();
 document.getElementById('log').textContent=(state.log||[]).join("\n");document.getElementById('log').scrollTop=999999;
 for(const r of resources)document.getElementById('r-'+r).textContent=state.you?state.you.resources[r]:0;
-document.getElementById('scores').innerHTML=state.players.map(p=>`<div class="score-row"><span>${p.name}${p.cpu?" CPU":""}</span><b>${p.score} VP</b></div>`).join("");
+document.getElementById('scores').innerHTML=state.players.map(p=>`<div class="score-row"><span>${nameHtml(p)}</span><b>${p.score} VP</b></div>`).join("");
 document.getElementById('startBtn').disabled=!state.you||!state.you.host||state.started;
 document.getElementById('startBtn').textContent=state.started?"Game Started":state.you&&state.you.host?"Start Game":"Host Starts Game";
 if(state.awaiting==="robber"){const robber=document.querySelector('input[name=action][value=robber]');if(robber)robber.checked=true}
 if(state.awaiting==="free_road"){const road=document.querySelector('input[name=action][value=road]');if(road)road.checked=true}
 fillSelect('bankGive',resources.map(r=>[r,labels[r]]));fillSelect('bankGet',resources.map(r=>[r,labels[r]]));document.getElementById('rates').textContent=state.you?resources.map(r=>`${labels[r]} ${state.you.rates[r]}:1`).join(" | "):"";
-fillSelect('tradeTarget',state.players.filter(p=>!state.you||p.index!==state.you.index).map(p=>[p.index,p.name]));
-fillResourceInputs('offerBox','offer');fillResourceInputs('requestBox','request');renderCostCard();renderDev();renderPending();draw()}
+fillPlayerSelect('tradeTarget',state.players.filter(p=>!state.you||p.index!==state.you.index));
+fillResourceInputs('offerBox','offer');fillResourceInputs('requestBox','request');renderCostCard();renderDev();renderPending();renderWinner();if(state.awaiting!=="robber")cancelRobberVictim();draw()}
 function fillSelect(id,items){const el=document.getElementById(id), cur=el.value;el.innerHTML=items.map(([v,t])=>`<option value="${v}">${t}</option>`).join("");if(items.some(i=>String(i[0])===cur))el.value=cur}
+function fillPlayerSelect(id,players){const el=document.getElementById(id), cur=el.value;el.innerHTML=players.map(p=>`<option value="${p.index}" style="color:${p.color_hex}">${esc(playerLabel(p))}</option>`).join("");if(players.some(p=>String(p.index)===cur))el.value=cur;let p=players.find(p=>String(p.index)===el.value);el.style.color=p?p.color_hex:""}
+document.getElementById('tradeTarget').addEventListener('change',()=>{let p=state&&state.players.find(p=>String(p.index)===document.getElementById('tradeTarget').value);document.getElementById('tradeTarget').style.color=p?p.color_hex:""});
+document.getElementById('robberVictim').addEventListener('change',()=>{let victims=(state&&pendingRobberHex!==null&&state.robber_targets&&state.robber_targets[pendingRobberHex])||[],p=victims.find(p=>String(p.index)===document.getElementById('robberVictim').value);document.getElementById('robberVictim').style.color=p?p.color_hex:""});
 function fillResourceInputs(id,prefix){const box=document.getElementById(id);if(box.childElementCount)return;box.innerHTML=resources.map(r=>`<label>${labels[r]} <input id="${prefix}-${r}" type="number" inputmode="numeric" min="0" max="20" value="0" style="width:46px"></label>`).join(" ")}
 function renderCostCard(){const box=document.getElementById('costCard');if(box.childElementCount)return;box.innerHTML=buildCosts.map(([name,cost])=>`<b>${name}</b><span>${resources.filter(r=>cost[r]).map(r=>`${cost[r]} ${labels[r]}`).join(", ")}</span>`).join("")}
 function renderDev(){const sel=document.getElementById('devSelect');let cards=(state.you&&state.you.dev_cards)||[], sig=cards.map((c,i)=>`${i}:${c.name}:${c.playable}:${c.reason}`).join("|"), previous=sel.value;if(sig!==devSignature){sel.innerHTML=cards.length?cards.map((c,i)=>`<option value="${i}">${i+1}. ${c.name}${c.playable?"":" ("+c.reason+")"}</option>`).join(""):`<option value="">No cards</option>`;devSignature=sig;if([...sel.options].some(o=>o.value===previous))sel.value=previous}let c=cards[sel.value]||cards[0];let box=document.getElementById('devChoices');let need=c?c.name:"";if(box.dataset.card===need)return;box.dataset.card=need;box.innerHTML="";if(c&&c.name==="Monopoly")box.innerHTML=resourceDropdown('dev-one','Choose resource');if(c&&c.name==="Year of Plenty")box.innerHTML=resourceDropdown('dev-one','First resource')+resourceDropdown('dev-two','Second resource')}
@@ -141,7 +154,8 @@ function playDev(){let cards=(state.you&&state.you.dev_cards)||[], c=cards[docum
 function bankTrade(){act({type:'bank_trade',give:document.getElementById('bankGive').value,get:document.getElementById('bankGet').value})}
 function bundle(prefix){let b={};for(const r of resources)b[r]=+(document.getElementById(prefix+'-'+r)?.value||0);return b}
 function proposeTrade(){act({type:'propose_trade',target:+document.getElementById('tradeTarget').value,offer:bundle('offer'),request:bundle('request')})}
-function renderPending(){const p=state.pending_trade, box=document.getElementById('pendingBox');box.classList.toggle('hidden',!p);if(!p){pendingTradeSignature="";return}let text=`${p.from} offers ${p.offer} for ${p.request}.`;document.getElementById('pendingText').textContent=text;let sig=`${p.from}|${p.offer}|${p.request}`;if(sig!==pendingTradeSignature){pendingTradeSignature=sig;alert(`Trade proposed\n\n${text}`)}}
+function renderPending(){const p=state.pending_trade, box=document.getElementById('pendingBox');box.classList.toggle('hidden',!p);if(!p){pendingTradeSignature="";return}let from=state.players.find(x=>x.index===p.from_index)||{name:p.from,color_hex:"#172026"};let text=`${p.from} offers ${p.offer} for ${p.request}.`;document.getElementById('pendingText').innerHTML=`${nameHtml(from)} offers ${esc(p.offer)} for ${esc(p.request)}.`;let sig=`${p.from}|${p.offer}|${p.request}`;if(sig!==pendingTradeSignature){pendingTradeSignature=sig;alert(`Trade proposed\n\n${text}`)}}
+function renderWinner(){const w=state.winner;if(!w){winnerSignature="";return}let sig=`${w.index}:${w.name}`;if(sig!==winnerSignature){winnerSignature=sig;alert(`Game Over\n\n${w.name} wins!`)}}
 function respondTrade(ok){act({type:ok?'accept_trade':'decline_trade'})}
 function selectedAction(){return document.querySelector('input[name=action]:checked').value}
 function resize(){const dpr=window.devicePixelRatio||1,w=Math.max(1,canvas.clientWidth),h=Math.max(1,canvas.clientHeight);canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);draw()}window.addEventListener('resize',resize);window.addEventListener('orientationchange',()=>setTimeout(resize,150));
@@ -164,8 +178,10 @@ function nearestHex(x,y){let best=null,bd=1e9;for(const t of state.board.tiles){
 function distSeg(px,py,a,b){let dx=b[0]-a[0],dy=b[1]-a[1],t=Math.max(0,Math.min(1,((px-a[0])*dx+(py-a[1])*dy)/(dx*dx+dy*dy)));let x=a[0]+t*dx,y=a[1]+t*dy;return(x-px)**2+(y-py)**2}
 canvas.addEventListener('pointermove',ev=>{if(!state)return;let r=canvas.getBoundingClientRect(),x=wx(ev.clientX-r.left),y=wy(ev.clientY-r.top),b=nearestBuilding(x,y);if(b!==hoverBuilding){hoverBuilding=b;draw()}});
 canvas.addEventListener('pointerleave',()=>{if(hoverBuilding!==null){hoverBuilding=null;draw()}});
-function chooseRobberVictim(hex){let victims=(state.robber_targets&&state.robber_targets[hex])||[];if(victims.length===0)return null;if(victims.length===1)return victims[0].index;let options=victims.map((v,i)=>`${i+1}. ${v.name}`).join("\n"), pick=prompt(`Steal from which player?\n${options}`,"1");if(pick===null)return undefined;let index=+pick-1;if(!Number.isInteger(index)||index<0||index>=victims.length){alert("Choose one of the listed players.");return undefined}return victims[index].index}
-canvas.addEventListener('click',ev=>{if(!state||!state.you)return;let r=canvas.getBoundingClientRect(),x=wx(ev.clientX-r.left),y=wy(ev.clientY-r.top),a=selectedAction();hoverBuilding=nearestBuilding(x,y);if(state.phase==="setup_settlement"||a==="settlement")act({type:'settlement',vertex:nearestVertex(x,y)});else if(state.phase==="setup_road"||a==="road"||state.awaiting==="free_road"){let e=nearestEdge(x,y);if(e)act({type:'road',edge:e})}else if(a==="city")act({type:'city',vertex:nearestVertex(x,y)});else if(state.awaiting==="robber"){let hex=nearestHex(x,y),victim=chooseRobberVictim(hex);if(victim!==undefined)act({type:'robber',hex,victim})}else if(a==="robber")alert("You can only move the robber after rolling a 7 or playing a Knight.");draw()});
+function beginRobberMove(hex){let victims=(state.robber_targets&&state.robber_targets[hex])||[];if(victims.length===0){act({type:'robber',hex});return}if(victims.length===1){act({type:'robber',hex,victim:victims[0].index});return}pendingRobberHex=hex;fillPlayerSelect('robberVictim',victims);document.getElementById('robberBox').classList.remove('hidden')}
+function confirmRobberVictim(){if(pendingRobberHex===null)return;let victim=+document.getElementById('robberVictim').value;let hex=pendingRobberHex;cancelRobberVictim();act({type:'robber',hex,victim})}
+function cancelRobberVictim(){pendingRobberHex=null;document.getElementById('robberBox').classList.add('hidden')}
+canvas.addEventListener('click',ev=>{if(!state||!state.you)return;let r=canvas.getBoundingClientRect(),x=wx(ev.clientX-r.left),y=wy(ev.clientY-r.top),a=selectedAction();hoverBuilding=nearestBuilding(x,y);if(state.phase==="setup_settlement"||a==="settlement")act({type:'settlement',vertex:nearestVertex(x,y)});else if(state.phase==="setup_road"||a==="road"||state.awaiting==="free_road"){let e=nearestEdge(x,y);if(e)act({type:'road',edge:e})}else if(a==="city")act({type:'city',vertex:nearestVertex(x,y)});else if(state.awaiting==="robber")beginRobberMove(nearestHex(x,y));else if(a==="robber")alert("You can only move the robber after rolling a 7 or playing a Knight.");draw()});
 resize();fetchState();setInterval(fetchState,1000);
 </script>
 </body>
@@ -221,6 +237,7 @@ class OnlineCatan:
 
     def state(self, token: str) -> dict:
         with self.lock:
+            self._expire_pending_trade()
             viewer = self.player_for(token)
             g = self.game
             return {
@@ -228,12 +245,17 @@ class OnlineCatan:
                 "started": self.started,
                 "phase": g.phase,
                 "awaiting": g.awaiting,
+                "free_roads_remaining": g.free_roads_remaining,
                 "status": self._status(),
+                "current": g.current,
+                "winner": self._winner(),
                 "log": g.log[-28:],
                 "players": [
                     {
                         "index": i,
                         "name": p.name,
+                        "color": PLAYER_COLOR_NAMES[i],
+                        "color_hex": p.color,
                         "cpu": p.is_cpu,
                         "score": g.public_score(i, viewer if viewer is not None else -1),
                     }
@@ -248,6 +270,7 @@ class OnlineCatan:
 
     def action(self, token: str, data: dict) -> dict:
         with self.lock:
+            self._expire_pending_trade()
             kind = data.get("type")
             if kind == "start_game":
                 return self.start_game(token, data.get("difficulty", "normal"))
@@ -320,13 +343,14 @@ class OnlineCatan:
                     return {"ok": False, "error": "Choose another player."}
                 offer = self._clean_bundle(data.get("offer", {}))
                 request = self._clean_bundle(data.get("request", {}))
-                if not any(offer.values()) and not any(request.values()):
-                    return {"ok": False, "error": "Offer or request at least one card."}
+                if not any(offer.values()) or not any(request.values()):
+                    return {"ok": False, "error": "Each side must give at least one resource."}
                 if not g._has_resources(g.players[player], offer):
                     return {"ok": False, "error": "You do not have the offered resources."}
-                if not g._has_resources(g.players[target], request):
-                    return {"ok": False, "error": f"{g.players[target].name} does not have those resources."}
                 if g.players[target].is_cpu:
+                    if not g._has_resources(g.players[target], request):
+                        g.add_log(f"{g.players[target].name} declined {g.players[player].name}'s trade.")
+                        return {"ok": True}
                     if self.cpu_accepts_trade(player, target, offer, request):
                         if not g.player_trade(player, target, offer, request):
                             return {"ok": False, "error": "That trade is no longer possible."}
@@ -334,11 +358,17 @@ class OnlineCatan:
                         g.add_log(f"{g.players[target].name} declined {g.players[player].name}'s trade.")
                     return {"ok": True}
                 self.pending_trade = {"from": player, "to": target, "offer": offer, "request": request}
+                if not g._has_resources(g.players[target], request):
+                    self.pending_trade["auto_decline_at"] = time.monotonic() + 3.0
                 g.add_log(f"{g.players[player].name} proposed a trade to {g.players[target].name}.")
             elif kind == "accept_trade":
                 if not self.pending_trade or self.pending_trade["to"] != player:
                     return {"ok": False, "error": "No trade is waiting for you."}
                 trade = self.pending_trade
+                if not g._has_resources(g.players[trade["from"]], trade["offer"]) or not g._has_resources(g.players[trade["to"]], trade["request"]):
+                    g.add_log(f"{g.players[player].name} declined the trade.")
+                    self.pending_trade = None
+                    return {"ok": False, "error": "That trade is no longer possible."}
                 if not g.player_trade(trade["from"], trade["to"], trade["offer"], trade["request"]):
                     self.pending_trade = None
                     return {"ok": False, "error": "That trade is no longer possible."}
@@ -392,6 +422,16 @@ class OnlineCatan:
 
     def _clean_bundle(self, raw: dict) -> dict[str, int]:
         return {r: max(0, int(raw.get(r, 0) or 0)) for r in RESOURCES}
+
+    def _expire_pending_trade(self) -> None:
+        if not self.pending_trade:
+            return
+        deadline = self.pending_trade.get("auto_decline_at")
+        if deadline is None or time.monotonic() < deadline:
+            return
+        trade = self.pending_trade
+        self.game.add_log(f"{self.game.players[trade['to']].name} declined {self.game.players[trade['from']].name}'s trade.")
+        self.pending_trade = None
 
     def cpu_accepts_trade(self, proposer: int, cpu_index: int, offer: dict[str, int], request: dict[str, int]) -> bool:
         g = self.game
@@ -456,6 +496,12 @@ class OnlineCatan:
             return f"{p.name}: place {g.free_roads_remaining} free road(s)."
         return f"{p.name}'s turn. " + ("Roll the dice." if not g.turn_has_rolled else "Trade, build, play a card, or end turn.")
 
+    def _winner(self) -> dict | None:
+        winner = self.game.winner
+        if winner is None:
+            return None
+        return {"index": winner, "name": self.game.players[winner].name, "color": PLAYER_COLOR_NAMES[winner], "color_hex": self.game.players[winner].color}
+
     def _you(self, viewer: int) -> dict:
         g = self.game
         p = g.players[viewer]
@@ -484,7 +530,8 @@ class OnlineCatan:
         return {
             "index": viewer,
             "name": p.name,
-            "color": f"Player {viewer + 1}",
+            "color": PLAYER_COLOR_NAMES[viewer],
+            "color_hex": p.color,
             "host": self.host_token is not None and self.claims.get(self.host_token) == viewer,
             "resources": p.resources,
             "dev_cards": cards,
@@ -502,7 +549,7 @@ class OnlineCatan:
         if viewer is None or viewer != self.game.current or not self.started:
             return {}
         return {
-            str(tile.hid): [{"index": i, "name": self.game.players[i].name} for i in self.game.robber_victims(tile.hid)]
+            str(tile.hid): [{"index": i, "name": self.game.players[i].name, "color": PLAYER_COLOR_NAMES[i], "color_hex": self.game.players[i].color} for i in self.game.robber_victims(tile.hid)]
             for tile in self.game.tiles
         }
 
@@ -512,6 +559,7 @@ class OnlineCatan:
         trade = self.pending_trade
         return {
             "from": self.game.players[trade["from"]].name,
+            "from_index": trade["from"],
             "offer": self.game._resource_bundle_text(trade["offer"]),
             "request": self.game._resource_bundle_text(trade["request"]),
         }

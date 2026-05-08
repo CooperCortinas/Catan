@@ -55,6 +55,7 @@ TERRAIN_COLORS = {
     "sea": "#5aa9c9",
 }
 PLAYER_COLORS = ["#d63a2f", "#f5f2e7", "#2874d0", "#ef8f28", "#2f9e59", "#8a5a35"]
+PLAYER_COLOR_NAMES = ["Red", "White", "Blue", "Orange", "Green", "Brown"]
 BUILD_COSTS = {
     "road": {"brick": 1, "lumber": 1},
     "settlement": {"brick": 1, "lumber": 1, "wool": 1, "grain": 1},
@@ -622,6 +623,8 @@ class CatanGame:
     def player_trade(self, from_index: int, to_index: int, offer: dict[str, int], request: dict[str, int]) -> bool:
         if from_index == to_index:
             return False
+        if not any(offer.values()) or not any(request.values()):
+            return False
         giver = self.players[from_index]
         receiver = self.players[to_index]
         if not self._has_resources(giver, offer) or not self._has_resources(receiver, request):
@@ -906,8 +909,11 @@ class CatanApp(tk.Tk):
         scores = ttk.LabelFrame(side, text="Scores", padding=8)
         scores.pack(fill="x", pady=(0, 6))
         self.score_vars = [tk.StringVar() for _ in self.game.players]
+        self.score_labels = []
         for row, var in enumerate(self.score_vars):
-            ttk.Label(scores, textvariable=var, font=("Segoe UI", 9, "bold")).grid(row=row, column=0, sticky="w", pady=1)
+            label = tk.Label(scores, textvariable=var, font=("Segoe UI", 9, "bold"), fg=PLAYER_COLORS[row], bg="#f7f7f7")
+            label.grid(row=row, column=0, sticky="w", pady=1)
+            self.score_labels.append(label)
         ttk.Label(scores, text="Opponents exclude hidden VP cards.", font=("Segoe UI", 8)).grid(row=len(self.score_vars), column=0, sticky="w", pady=(3, 0))
         button_row = ttk.Frame(side)
         button_row.pack(anchor="w", pady=3)
@@ -1176,8 +1182,8 @@ class CatanApp(tk.Tk):
             target_index = next(i for i in targets if self.game.players[i].name == target_var.get())
             offer = {r: max(0, offer_vars[r].get()) for r in RESOURCES}
             request = {r: max(0, request_vars[r].get()) for r in RESOURCES}
-            if not any(offer.values()) and not any(request.values()):
-                messagebox.showinfo("Trade", "Add at least one resource to the trade.")
+            if not any(offer.values()) or not any(request.values()):
+                messagebox.showinfo("Trade", "Each side must give at least one resource.")
                 return
             if not self.game._has_resources(active, offer):
                 messagebox.showinfo("Trade", "You do not have the resources you are offering.")
@@ -1520,7 +1526,7 @@ class CatanApp(tk.Tk):
             var.set(str(p.resources[r]))
         for i, var in enumerate(self.score_vars):
             player = self.game.players[i]
-            cpu = " (CPU)" if player.is_cpu else ""
+            cpu = " CPU" if player.is_cpu else ""
             awards = []
             if self.game.longest_road_owner == i:
                 awards.append("LR")
@@ -1529,8 +1535,8 @@ class CatanApp(tk.Tk):
             suffix = f" [{', '.join(awards)}]" if awards else ""
             score = self.game.public_score(i, self.game.current)
             name = player.name
-            if len(name) > 14:
-                name = name[:13] + "."
+            if len(name) > 22:
+                name = name[:21] + "."
             var.set(f"{name}{cpu}: {score} VP{suffix}")
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
