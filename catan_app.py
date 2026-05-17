@@ -123,9 +123,11 @@ class CatanGame:
         self.dev_deck: list[str] = []
         self.longest_road_owner: int | None = None
         self.largest_army_owner: int | None = None
-        self.current = 0
         self.phase = "setup_settlement"
-        self.setup_order = list(range(player_count)) + list(reversed(range(player_count)))
+        self.setup_start_player = random.randrange(player_count)
+        first_setup_pass = [(self.setup_start_player + i) % player_count for i in range(player_count)]
+        self.setup_order = first_setup_pass + list(reversed(first_setup_pass))
+        self.current = self.setup_order[0]
         self.setup_index = 0
         self.pending_setup_vertex: int | None = None
         self.turn_has_rolled = False
@@ -522,6 +524,8 @@ class CatanGame:
         return [i for i in victims if self.players[i].resource_count() > 0]
 
     def move_robber(self, hid: int, victim: int | None = None) -> bool:
+        if hid < 0 or hid >= len(self.tiles) or self.tiles[hid].robber:
+            return False
         victims = self.robber_victims(hid)
         if victims and victim is not None and victim not in victims:
             return False
@@ -747,8 +751,8 @@ class CatanGame:
         self.pending_setup_vertex = None
         if self.setup_index >= len(self.setup_order):
             self.phase = "play"
-            self.current = 0
-            self.add_log("Setup complete. Player 1 begins.")
+            self.current = self.setup_start_player
+            self.add_log(f"Setup complete. {self.active_player().name} begins.")
         else:
             self.current = self.setup_order[self.setup_index]
             self.phase = "setup_settlement"
@@ -772,10 +776,11 @@ class CatanGame:
             self.next_turn()
             return
         # CPUs trade only with bank and build greedily.
-        loops = 6 if difficulty == "hard" else 4
         order = ["city", "settlement", "road", "development"] if difficulty != "easy" else ["road", "settlement", "development", "city"]
+        base_loops = 6 if difficulty == "hard" else 4
+        loops = max(base_loops, min(12, self.active_player().resource_count()))
         for _ in range(loops):
-            self._cpu_trade_for_build()
+            traded = self._cpu_trade_for_build(order)
             built = False
             for target in order:
                 if target == "city" and self._cpu_build_city():
@@ -790,7 +795,7 @@ class CatanGame:
                 if target == "development" and self.buy_dev(self.current):
                     built = True
                     break
-            if built:
+            if built or traded:
                 continue
             break
         playable = self.playable_dev_cards(self.current)
@@ -801,18 +806,32 @@ class CatanGame:
                 self.move_robber(random.choice([t.hid for t in self.tiles if not t.robber]))
         self.next_turn()
 
-    def _cpu_trade_for_build(self) -> None:
+    def _cpu_trade_for_build(self, order: list[str]) -> bool:
         p = self.active_player()
-        for target in ["city", "settlement", "road", "development"]:
+        for target in order:
+            if target == "city" and not self.valid_city_vertices(self.current):
+                continue
+            if target == "settlement" and not self.valid_settlement_vertices(self.current):
+                continue
+            if target == "road" and not self.valid_road_edges(self.current):
+                continue
+            if target == "development" and not self.dev_deck:
+                continue
             cost = BUILD_COSTS[target]
             missing = [r for r, n in cost.items() if p.resources[r] < n]
             if not missing:
-                return
-            need = missing[0]
-            for give in RESOURCES:
-                if give != need and p.resources[give] >= self.trade_rate(self.current, give):
+                continue
+            need = max(missing, key=lambda r: cost[r] - p.resources[r])
+            surplus = sorted(
+                (r for r in RESOURCES if r != need and p.resources[r] >= self.trade_rate(self.current, r)),
+                key=lambda r: p.resources[r] - cost.get(r, 0),
+                reverse=True,
+            )
+            for give in surplus:
+                if p.resources[give] - cost.get(give, 0) >= self.trade_rate(self.current, give):
                     self.bank_trade(give, need)
-                    return
+                    return True
+        return False
 
     def _cpu_build_city(self) -> bool:
         verts = self.valid_city_vertices(self.current)
@@ -1312,11 +1331,15 @@ class CatanApp(tk.Tk):
         elif self.game.awaiting == "robber":
             hid = self._nearest_hex(x, y)
             if hid is not None:
+                if self.game.tiles[hid].robber:
+                    messagebox.showinfo("Robber", "Move the robber to a different hex.")
+                    return
                 victims = self.game.robber_victims(hid)
                 victim = self._choose_robber_victim(hid)
                 if len(victims) > 1 and victim is None:
                     return
-                self.game.move_robber(hid, victim)
+                if not self.game.move_robber(hid, victim):
+                    messagebox.showinfo("Robber", "Choose a valid hex and victim.")
         elif action == "robber":
             messagebox.showinfo("Robber", "You can only move the robber after rolling a 7 or playing a Knight.")
         elif action == "settlement":
@@ -1470,12 +1493,18 @@ class CatanApp(tk.Tk):
             ax, ay = self._screen(*self.game.vertices[a])
             bx, by = self._screen(*self.game.vertices[b])
             self.canvas.create_line(ax, ay, bx, by, fill=self.game.players[owner].color, width=6, capstyle="round")
-        for v, _partner, port in self.game.port_markers:
-            vx, vy = self.game.vertices[v]
-            x, y = self._screen(vx, vy)
+        for v, partner, port in self.game.port_markers:
+            endpoints = [v]
+            if partner is not None:
+                endpoints.append(partner)
+                ax, ay = self._screen(*self.game.vertices[v])
+                bx, by = self._screen(*self.game.vertices[partner])
+                self.canvas.create_line(ax, ay, bx, by, fill="#225d78", width=4, capstyle="round")
+            points = [self._screen(*self.game.vertices[endpoint]) for endpoint in endpoints]
             label = "3" if port == "3:1" else RESOURCE_LABELS[port][:2].lower()
-            self.canvas.create_oval(x - 14, y - 14, x + 14, y + 14, fill="#e8f2ff", outline="#225d78", width=2)
-            self.canvas.create_text(x, y, text=label, font=("Segoe UI", 8, "bold"))
+            for x, y in points:
+                self.canvas.create_oval(x - 14, y - 14, x + 14, y + 14, fill="#e8f2ff", outline="#225d78", width=2)
+                self.canvas.create_text(x, y, text=label, font=("Segoe UI", 8, "bold"))
         if self.selected_action.get() == "settlement" and self.game.phase == "play" and not self.game.active_player().is_cpu:
             legal = self.game.valid_settlement_vertices(self.game.current)
             for v in legal:
