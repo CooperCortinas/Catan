@@ -36,7 +36,7 @@ button,select,input{font:inherit;max-width:100%}button{border:1px solid #aeb8bd;
 .left,.right{background:#f7f7f7;border-color:#d8dee2;padding:10px;overflow:auto}.left{border-right:1px solid #d8dee2}.right{border-left:1px solid #d8dee2}
 h1{font-size:22px;margin:0 0 8px}h2{font-size:14px;margin:10px 0 6px}.small{font-size:12px;color:#5c6870}.panel{border:1px solid #d8dee2;background:#fff;padding:8px;margin:8px 0;border-radius:4px}
 main{min-width:0;min-height:0}#board{display:block;width:100%;height:100%;background:#74b8d3;touch-action:manipulation}.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:5px 0}
-.grid{display:grid;grid-template-columns:1fr auto;gap:4px 12px}.score-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #edf0f2;padding:3px 0}.score-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.score-row b{white-space:nowrap}
+.grid{display:grid;grid-template-columns:1fr auto;gap:4px 12px}.score-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #edf0f2;padding:3px 0}.score-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.score-row b{white-space:nowrap}.award{display:inline-block;margin-left:4px;border:1px solid #b88a2b;background:#fff8e4;color:#694b10;border-radius:3px;padding:0 3px;font-size:11px;font-weight:700;line-height:1.25;vertical-align:.05em}
 .res{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 14px}.res b{display:inline-block;min-width:24px}.log{height:55vh;overflow:auto;white-space:pre-wrap;background:#fffaf0;border:1px solid #e0d2a7;padding:8px}
 .cost-card{display:grid;grid-template-columns:auto 1fr;gap:4px 10px}.cost-card b{white-space:nowrap}.cost-card span{min-width:0}
 .cards select,.trade select{width:100%;margin:3px 0}.hidden{display:none}.status{font-weight:600;margin:4px 0 8px}
@@ -146,6 +146,9 @@ function startGame(){act({type:'start_game',difficulty:document.getElementById('
 function fetchState(){fetch("/api/state?token="+encodeURIComponent(token)).then(r=>r.json()).then(j=>{state=j;renderAll()}).catch(()=>{})}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function nameHtml(p){return `<span class="swatch" style="background:${p.color_hex}"></span><span>${esc(p.name)}</span>${p.cpu?" CPU":""}`}
+function awardHtml(p){return `${p.longest_road?'<span class="award" title="Longest Road">LR</span>':""}${p.largest_army?'<span class="award" title="Largest Army">LA</span>':""}`}
+function cardText(p){return `${p.card_count} card${p.card_count===1?"":"s"}`}
+function devText(p){return `${p.dev_count} dev${p.dev_count===1?"":"s"}`}
 function playerLabel(p){return `${p.name}${p.cpu?" CPU":""}`}
 function playerTextColor(p){return (p.color_hex||"").toLowerCase()==="#f5f2e7"?"#172026":p.color_hex}
 function renderStatus(){const box=document.getElementById('turnStatus');if(!state.started||!state.players[state.current]){box.textContent=state.status;return}let p=state.winner?state.players[state.winner.index]:state.players[state.current], suffix="";if(state.winner)suffix=" wins.";else if(state.phase==="setup_settlement")suffix=": place a starting settlement.";else if(state.phase==="setup_road")suffix=": place a road touching that settlement.";else if(state.awaiting==="robber")suffix=": move the robber.";else if(state.awaiting==="free_road")suffix=`: place ${state.free_roads_remaining||""} free road(s).`;else suffix="'s turn. "+(state.status.includes("Roll the dice")?"Roll the dice.":"Trade, build, play a card, or end turn.");box.innerHTML=nameHtml(p)+esc(suffix)}
@@ -153,7 +156,7 @@ function renderLog(){const el=document.getElementById('log'), entries=state.log|
 function renderAll(){if(!state)return;document.getElementById('seatStatus').innerHTML=state.you?`${nameHtml(state.you)}`:spectatorMode?"Spectating":"Not joined";renderStatus();
 renderLog();
 for(const r of resources)document.getElementById('r-'+r).textContent=state.you?state.you.resources[r]:0;
-document.getElementById('scores').innerHTML=state.players.map(p=>`<div class="score-row"><span>${nameHtml(p)}</span><b>${p.score} VP</b></div>`).join("");
+document.getElementById('scores').innerHTML=state.players.map(p=>`<div class="score-row"><span class="score-name">${nameHtml(p)}${awardHtml(p)}</span><b>${p.score} VP | ${cardText(p)} | ${devText(p)}</b></div>`).join("");
 document.getElementById('startBtn').disabled=!state.you||!state.you.host||state.started;
 document.getElementById('startBtn').textContent=state.started?"Game Started":state.you&&state.you.host?"Start Game":"Host Starts Game";
 if(state.awaiting==="robber"){const robber=document.querySelector('input[name=action][value=robber]');if(robber)robber.checked=true}
@@ -280,6 +283,10 @@ class OnlineCatan:
                         "color_hex": p.color,
                         "cpu": p.is_cpu,
                         "score": g.public_score(i, viewer if viewer is not None else -1),
+                        "card_count": p.card_count(),
+                        "dev_count": len(p.dev_cards),
+                        "longest_road": g.longest_road_owner == i,
+                        "largest_army": g.largest_army_owner == i,
                     }
                     for i, p in enumerate(g.players)
                 ],

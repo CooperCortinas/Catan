@@ -99,6 +99,9 @@ class Player:
     def resource_count(self) -> int:
         return sum(self.resources.values())
 
+    def card_count(self) -> int:
+        return self.resource_count() + len(self.dev_cards)
+
 
 class CatanGame:
     def __init__(self, player_count: int, human_count: int, names: list[str]):
@@ -1561,12 +1564,16 @@ class CatanApp(tk.Tk):
                 awards.append("LR")
             if self.game.largest_army_owner == i:
                 awards.append("LA")
-            suffix = f" [{', '.join(awards)}]" if awards else ""
+            award_label = f" [{', '.join(awards)}]" if awards else ""
             score = self.game.public_score(i, self.game.current)
+            card_count = player.card_count()
+            card_word = "card" if card_count == 1 else "cards"
+            dev_count = len(player.dev_cards)
+            dev_word = "dev" if dev_count == 1 else "devs"
             name = player.name
             if len(name) > 22:
                 name = name[:21] + "."
-            var.set(f"{name}{cpu}: {score} VP{suffix}")
+            var.set(f"{name}{cpu}{award_label}: {score} VP, {card_count} {card_word}, {dev_count} {dev_word}")
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.insert("end", "\n".join(self.game.log[-16:]))
