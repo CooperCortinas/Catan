@@ -5,6 +5,7 @@ import random
 import tkinter as tk
 from collections import Counter
 from dataclasses import dataclass, field
+from itertools import combinations
 from tkinter import messagebox, ttk
 
 
@@ -100,7 +101,7 @@ class Player:
         return sum(self.resources.values())
 
     def card_count(self) -> int:
-        return self.resource_count() + len(self.dev_cards)
+        return self.resource_count()
 
 
 class CatanGame:
@@ -137,6 +138,7 @@ class CatanGame:
         self.dev_played_this_turn = False
         self.awaiting = None
         self.free_roads_remaining = 0
+        self.cpu_trade_offers_made: set[tuple[int, int, str, str]] = set()
         self.log: list[str] = []
         self.last_roll: int | None = None
         self.winner: int | None = None
@@ -742,6 +744,7 @@ class CatanGame:
     def next_turn(self) -> None:
         p = self.active_player()
         p.new_dev_cards.clear()
+        self.cpu_trade_offers_made.clear()
         self.current = (self.current + 1) % self.player_count
         self.turn_has_rolled = False
         self.dev_played_this_turn = False
@@ -768,21 +771,23 @@ class CatanGame:
         self.place_road(pidx, edge, setup_vertex=vertex)
         self.finish_setup_step()
 
-    def cpu_take_turn(self) -> None:
+    def cpu_take_turn(self, trade_callback=None) -> bool:
         difficulty = getattr(self.active_player(), "difficulty", "normal")
         if not self.turn_has_rolled:
             self.roll()
         if self.awaiting == "robber":
-            targets = [t.hid for t in self.tiles if not t.robber]
-            self.move_robber(random.choice(targets))
+            hid, victim = self._cpu_pick_robber_move()
+            self.move_robber(hid, victim)
         if difficulty == "easy" and random.random() < 0.35:
             self.next_turn()
-            return
-        # CPUs trade only with bank and build greedily.
-        order = ["city", "settlement", "road", "development"] if difficulty != "easy" else ["road", "settlement", "development", "city"]
+            return True
+        order = self._cpu_build_order()
         base_loops = 6 if difficulty == "hard" else 4
         loops = max(base_loops, min(12, self.active_player().resource_count()))
         for _ in range(loops):
+            player_trade = False if difficulty == "easy" else self._cpu_try_player_trade(order, trade_callback)
+            if player_trade == "pending":
+                return False
             traded = self._cpu_trade_for_build(order)
             built = False
             for target in order:
@@ -798,16 +803,19 @@ class CatanGame:
                 if target == "development" and self.buy_dev(self.current):
                     built = True
                     break
-            if built or traded:
+            if built or traded or player_trade:
                 continue
             break
         playable = self.playable_dev_cards(self.current)
         chance = 0.2 if difficulty == "easy" else 0.35 if difficulty == "normal" else 0.65
         if playable and random.random() < chance:
-            self.play_dev(random.choice(playable))
+            card = self._cpu_pick_dev_card(playable)
+            self.play_dev(card, self._cpu_dev_choice(card, order))
             if self.awaiting == "robber":
-                self.move_robber(random.choice([t.hid for t in self.tiles if not t.robber]))
+                hid, victim = self._cpu_pick_robber_move()
+                self.move_robber(hid, victim)
         self.next_turn()
+        return True
 
     def _cpu_trade_for_build(self, order: list[str]) -> bool:
         p = self.active_player()
@@ -824,10 +832,10 @@ class CatanGame:
             missing = [r for r, n in cost.items() if p.resources[r] < n]
             if not missing:
                 continue
-            need = max(missing, key=lambda r: cost[r] - p.resources[r])
+            need = max(missing, key=lambda r: (cost[r] - p.resources[r], self._cpu_resource_need_value(self.current, r)))
             surplus = sorted(
                 (r for r in RESOURCES if r != need and p.resources[r] >= self.trade_rate(self.current, r)),
-                key=lambda r: p.resources[r] - cost.get(r, 0),
+                key=lambda r: (p.resources[r] - cost.get(r, 0), -self._cpu_resource_need_value(self.current, r)),
                 reverse=True,
             )
             for give in surplus:
@@ -836,9 +844,270 @@ class CatanGame:
                     return True
         return False
 
+    def _cpu_build_order(self) -> list[str]:
+        difficulty = getattr(self.active_player(), "difficulty", "normal")
+        if difficulty == "easy":
+            return ["road", "settlement", "development", "city"]
+        goals = ["city", "settlement", "development", "road"]
+        scored = [(self._cpu_goal_value(goal), goal) for goal in goals]
+        scored.sort(reverse=True)
+        return [goal for _, goal in scored]
+
+    def _cpu_goal_value(self, goal: str) -> float:
+        player = self.active_player()
+        if goal == "city" and not self.valid_city_vertices(self.current):
+            return -100.0
+        if goal == "settlement" and not self.valid_settlement_vertices(self.current):
+            return -100.0
+        if goal == "road" and not self.valid_road_edges(self.current):
+            return -100.0
+        if goal == "development" and not self.dev_deck:
+            return -100.0
+
+        base = {"city": 9.0, "settlement": 8.0, "development": 4.5, "road": 3.0}[goal]
+        cost = BUILD_COSTS[goal]
+        missing = sum(max(0, amount - player.resources[resource]) for resource, amount in cost.items())
+        afford_bonus = 4.0 if missing == 0 else max(0.0, 2.5 - missing)
+        score = base + afford_bonus
+
+        if goal == "city":
+            score += max((self._cpu_city_value(v) for v in self.valid_city_vertices(self.current)), default=0.0) * 0.12
+        elif goal == "settlement":
+            score += max((self._cpu_vertex_value(v, self.current) for v in self.valid_settlement_vertices(self.current)), default=0.0) * 0.16
+        elif goal == "road":
+            score += max((self._cpu_edge_value(e) for e in self.valid_road_edges(self.current)), default=0.0) * 0.22
+            if not self.valid_settlement_vertices(self.current):
+                score += 1.6
+        elif goal == "development":
+            if self.score(self.current) >= 7:
+                score += 1.8
+            if self.largest_army_owner != self.current:
+                score += 0.9
+
+        leader_score = max((self.public_score(i, self.current) for i in range(self.player_count) if i != self.current), default=0)
+        if leader_score - self.public_score(self.current, self.current) >= 2 and goal in ("city", "settlement"):
+            score += 1.1
+        return score
+
+    def _cpu_build_goal(self, order: list[str]) -> tuple[str, dict[str, int]] | None:
+        p = self.active_player()
+        for target in order:
+            if target == "city" and not self.valid_city_vertices(self.current):
+                continue
+            if target == "settlement" and not self.valid_settlement_vertices(self.current):
+                continue
+            if target == "road" and not self.valid_road_edges(self.current):
+                continue
+            if target == "development" and not self.dev_deck:
+                continue
+            cost = BUILD_COSTS[target]
+            missing = {r: max(0, n - p.resources[r]) for r, n in cost.items()}
+            if any(missing.values()):
+                return target, missing
+        return None
+
+    def _cpu_try_player_trade(self, order: list[str], trade_callback=None) -> bool | str:
+        goal = self._cpu_build_goal(order)
+        if not goal:
+            return False
+        target, missing = goal
+        needs = sorted(
+            (r for r, amount in missing.items() if amount > 0),
+            key=lambda r: (missing[r], self._cpu_resource_need_value(self.current, r)),
+            reverse=True,
+        )
+        if not needs:
+            return False
+        proposer = self.current
+        for need in needs:
+            for offer in self._cpu_trade_offer_options(target, need):
+                request = {r: 0 for r in RESOURCES}
+                request[need] = 1
+                for target_index in self._cpu_trade_targets(need):
+                    marker = (proposer, target_index, self._bundle_signature(offer), need)
+                    if marker in self.cpu_trade_offers_made:
+                        continue
+                    self.cpu_trade_offers_made.add(marker)
+                    other = self.players[target_index]
+                    if not self._has_resources(other, request):
+                        continue
+                    if other.is_cpu:
+                        if self.cpu_accepts_trade(proposer, target_index, offer, request):
+                            return self.player_trade(proposer, target_index, offer, request)
+                        self.add_log(f"{other.name} declined {self.players[proposer].name}'s trade.")
+                        continue
+                    if trade_callback:
+                        result = trade_callback(proposer, target_index, offer, request)
+                        if result is None:
+                            return "pending"
+                        if result:
+                            return True
+                    else:
+                        self.add_log(f"{self.players[proposer].name} considered a trade with {other.name}.")
+        return False
+
+    def _cpu_trade_offer_options(self, target: str, need: str) -> list[dict[str, int]]:
+        player = self.active_player()
+        cost = BUILD_COSTS[target]
+        missing_total = sum(max(0, amount - player.resources[resource]) for resource, amount in cost.items())
+        best_other_score = max((self.public_score(i, self.current) for i in range(self.player_count) if i != self.current), default=0)
+        behind = best_other_score - self.public_score(self.current, self.current)
+        difficulty = getattr(player, "difficulty", "normal")
+        max_cards = 1
+        if target in ("city", "settlement") or missing_total <= 2:
+            max_cards = 2
+        if difficulty == "hard" and (target in ("city", "settlement") or behind >= 2):
+            max_cards = 3
+        if self.score(self.current) >= 7 and target in ("city", "settlement"):
+            max_cards = max(max_cards, 3)
+
+        cards = []
+        for resource in RESOURCES:
+            if resource == need:
+                continue
+            keep = cost.get(resource, 0)
+            extra = max(0, player.resources[resource] - keep)
+            usable = extra if extra else max(0, player.resources[resource] - 1)
+            cards.extend([resource] * min(usable, max_cards))
+
+        options: list[tuple[float, dict[str, int]]] = []
+        seen = set()
+        for size in range(1, max_cards + 1):
+            for combo in combinations(cards, size):
+                offer = {r: 0 for r in RESOURCES}
+                for resource in combo:
+                    offer[resource] += 1
+                signature = self._bundle_signature(offer)
+                if signature in seen or not self._has_resources(player, offer):
+                    continue
+                seen.add(signature)
+                if not self._cpu_trade_improves_goal(target, offer, need):
+                    continue
+                offer_value = self._trade_bundle_value(self.current, offer)
+                unlock_bonus = 4.0 if self._cpu_can_afford_after_trade(target, offer, need) else 0.0
+                urgency = {"city": 3.0, "settlement": 2.4, "development": 1.3, "road": 1.0}[target]
+                score = unlock_bonus + urgency + size * 0.35 - offer_value * 0.25
+                options.append((score, offer))
+        options.sort(key=lambda item: item[0], reverse=True)
+        return [offer for _, offer in options[:8]]
+
+    def _cpu_trade_improves_goal(self, target: str, offer: dict[str, int], need: str) -> bool:
+        player = self.active_player()
+        resources = player.resources.copy()
+        for resource, amount in offer.items():
+            resources[resource] -= amount
+        resources[need] += 1
+        cost = BUILD_COSTS[target]
+        before_missing = sum(max(0, amount - player.resources[resource]) for resource, amount in cost.items())
+        after_missing = sum(max(0, amount - resources[resource]) for resource, amount in cost.items())
+        return after_missing < before_missing
+
+    def _cpu_can_afford_after_trade(self, target: str, offer: dict[str, int], need: str) -> bool:
+        player = self.active_player()
+        resources = player.resources.copy()
+        for resource, amount in offer.items():
+            resources[resource] -= amount
+        resources[need] += 1
+        return all(resources[resource] >= amount for resource, amount in BUILD_COSTS[target].items())
+
+    def _bundle_signature(self, bundle: dict[str, int]) -> str:
+        return ",".join(f"{resource}:{bundle.get(resource, 0)}" for resource in RESOURCES if bundle.get(resource, 0) > 0)
+
+    def _cpu_trade_targets(self, need: str) -> list[int]:
+        targets = [i for i, p in enumerate(self.players) if i != self.current and p.resources[need] > 0]
+        return sorted(
+            targets,
+            key=lambda i: (
+                self.public_score(i, self.current),
+                -self.players[i].resources[need],
+                self.players[i].is_cpu,
+            ),
+        )
+
+    def cpu_accepts_trade(self, proposer: int, cpu_index: int, offer: dict[str, int], request: dict[str, int]) -> bool:
+        cpu = self.players[cpu_index]
+        if not self._has_resources(cpu, request):
+            return False
+        offer_value = self._trade_bundle_value(cpu_index, offer)
+        request_value = self._trade_bundle_value(cpu_index, request)
+        proposer_score = self.public_score(proposer, cpu_index)
+        cpu_score = self.public_score(cpu_index, cpu_index)
+        difficulty = getattr(cpu, "difficulty", "normal")
+        leader_penalty = 1.0
+        if proposer_score >= cpu_score + 2:
+            leader_penalty += 0.25
+        if proposer_score >= 8:
+            leader_penalty += 0.35
+        margin = 0.2 if difficulty == "easy" else 0.45 if difficulty == "normal" else 0.75
+        margin += max(0, proposer_score - cpu_score) * (0.1 if difficulty == "easy" else 0.18)
+        if difficulty == "easy":
+            return offer_value >= request_value * leader_penalty + margin and sum(offer.values()) >= sum(request.values())
+        return offer_value >= request_value * leader_penalty + margin
+
+    def _trade_bundle_value(self, player_index: int, bundle: dict[str, int]) -> float:
+        return sum(amount * self._resource_trade_value(player_index, resource) for resource, amount in bundle.items())
+
+    def _resource_trade_value(self, player_index: int, resource: str) -> float:
+        player = self.players[player_index]
+        value = 1.0
+        if player.resources[resource] == 0:
+            value += 0.55
+        value += self._cpu_resource_need_value(player_index, resource) * 0.18
+        if self.trade_rate(player_index, resource) <= 2:
+            value -= 0.25
+        for build, cost in BUILD_COSTS.items():
+            missing = {r: max(0, n - player.resources[r]) for r, n in cost.items()}
+            if missing.get(resource, 0) > 0:
+                if build == "city" and self.valid_city_vertices(player_index):
+                    value += 0.9
+                elif build == "settlement" and self.valid_settlement_vertices(player_index):
+                    value += 0.75
+                elif build == "road" and self.valid_road_edges(player_index):
+                    value += 0.35
+                elif build == "development":
+                    value += 0.25
+        return max(0.2, value)
+
+    def _cpu_pick_dev_card(self, playable: list[str]) -> str:
+        p = self.active_player()
+        if "Knight" in playable and (self.largest_army_owner != self.current or p.played_knights < 3):
+            return "Knight"
+        goal = self._cpu_build_goal(["city", "settlement", "development", "road"])
+        if "Year of Plenty" in playable and goal:
+            return "Year of Plenty"
+        if "Monopoly" in playable and any(other.resource_count() >= 5 for i, other in enumerate(self.players) if i != self.current):
+            return "Monopoly"
+        if "Road Building" in playable and self.valid_road_edges(self.current):
+            return "Road Building"
+        return random.choice(playable)
+
+    def _cpu_dev_choice(self, card: str, order: list[str]) -> str | None:
+        if card == "Year of Plenty":
+            goal = self._cpu_build_goal(order)
+            if goal:
+                _, missing = goal
+                choices = []
+                for resource, amount in sorted(
+                    missing.items(),
+                    key=lambda item: (item[1], self._cpu_resource_need_value(self.current, item[0])),
+                    reverse=True,
+                ):
+                    choices.extend([resource] * amount)
+                if choices:
+                    while len(choices) < 2:
+                        choices.append(choices[0])
+                    return ",".join(choices[:2])
+        if card == "Monopoly":
+            counts = {
+                resource: sum(player.resources[resource] for i, player in enumerate(self.players) if i != self.current)
+                for resource in RESOURCES
+            }
+            return max(counts, key=counts.get)
+        return None
+
     def _cpu_build_city(self) -> bool:
         verts = self.valid_city_vertices(self.current)
-        return bool(verts and self.place_city(self.current, random.choice(verts)))
+        return bool(verts and self.place_city(self.current, max(verts, key=self._cpu_city_value)))
 
     def _cpu_build_settlement(self) -> bool:
         verts = self.valid_settlement_vertices(self.current)
@@ -849,21 +1118,151 @@ class CatanGame:
         return bool(edges and self.place_road(self.current, self._cpu_pick_edge(edges)))
 
     def _cpu_pick_vertex(self, vertices: list[int]) -> int:
-        def value(v: int) -> int:
-            total = 0
-            for hid in self.vertex_tiles[v]:
-                n = self.tiles[hid].number
-                if n:
-                    total += 6 - abs(7 - n)
-            return total
-        return max(vertices, key=value)
+        return max(vertices, key=lambda v: self._cpu_vertex_value(v, self.current))
 
     def _cpu_pick_edge(self, edges: list[tuple[int, int]], from_vertex: int | None = None) -> tuple[int, int]:
         if from_vertex is not None:
             touching = [e for e in edges if from_vertex in e]
             if touching:
-                return random.choice(touching)
-        return random.choice(edges)
+                return max(touching, key=self._cpu_edge_value)
+        return max(edges, key=self._cpu_edge_value)
+
+    def _tile_pips(self, hid: int) -> int:
+        return NUMBER_DOTS.get(self.tiles[hid].number, 0)
+
+    def _cpu_vertex_value(self, vertex: int, player_index: int | None = None) -> float:
+        resources = []
+        value = 0.0
+        production = self._cpu_production_profile(player_index) if player_index is not None else {r: 0.0 for r in RESOURCES}
+        for hid in self.vertex_tiles[vertex]:
+            tile = self.tiles[hid]
+            resource = TERRAIN_RESOURCE[tile.terrain]
+            if not resource:
+                continue
+            pips = self._tile_pips(hid)
+            scarcity = 1.0 + max(0.0, 5.0 - production[resource]) * 0.08
+            need = 1.0 + self._cpu_resource_need_value(player_index, resource) * 0.08 if player_index is not None else 1.0
+            value += pips * scarcity * need * (0.55 if tile.robber else 1.0)
+            resources.append(resource)
+        value += len(set(resources)) * 1.35
+        if player_index is not None:
+            new_resources = {resource for resource in resources if production[resource] == 0}
+            value += len(new_resources) * 1.5
+        if player_index is not None and vertex in self.ports:
+            port = self.ports[vertex]
+            if port == "3:1":
+                value += 1.8
+            elif port in resources or production.get(port, 0) >= 5:
+                value += 2.5
+            else:
+                value += 0.8
+        open_neighbors = sum(1 for n in self.vertex_neighbors[vertex] if n not in self.buildings)
+        value += open_neighbors * 0.18
+        return value
+
+    def _cpu_city_value(self, vertex: int) -> float:
+        return self._cpu_vertex_value(vertex, self.current) + sum(self._tile_pips(hid) for hid in self.vertex_tiles[vertex]) * 0.7
+
+    def _cpu_edge_value(self, edge: tuple[int, int]) -> float:
+        values = []
+        for vertex in edge:
+            if vertex not in self.buildings and vertex in self.valid_settlement_vertices(self.current):
+                values.append(self._cpu_vertex_value(vertex, self.current) + 3.0)
+            else:
+                values.append(self._cpu_vertex_value(vertex, self.current) * 0.35)
+        value = max(values, default=0.0)
+        before = self._longest_road_len(self.current)
+        owner = self.edges.get(edge)
+        self.edges[edge] = self.current
+        after = self._longest_road_len(self.current)
+        if owner is None:
+            self.edges[edge] = None
+        else:
+            self.edges[edge] = owner
+        value += max(0, after - before) * 0.65
+        value += self._cpu_reachable_vertex_value(edge) * 0.18
+        return value + random.random() * 0.01
+
+    def _cpu_production_profile(self, player_index: int | None) -> dict[str, float]:
+        production = {resource: 0.0 for resource in RESOURCES}
+        if player_index is None:
+            return production
+        for vertex, building in self.buildings.items():
+            if building.owner != player_index:
+                continue
+            multiplier = 2 if building.kind == "city" else 1
+            for hid in self.vertex_tiles[vertex]:
+                tile = self.tiles[hid]
+                resource = TERRAIN_RESOURCE[tile.terrain]
+                if resource:
+                    production[resource] += self._tile_pips(hid) * multiplier * (0.55 if tile.robber else 1.0)
+        return production
+
+    def _cpu_resource_need_value(self, player_index: int | None, resource: str) -> float:
+        if player_index is None:
+            return 0.0
+        player = self.players[player_index]
+        production = self._cpu_production_profile(player_index)
+        value = max(0.0, 5.0 - production[resource]) * 0.18
+        build_weights = {"city": 1.35, "settlement": 1.15, "road": 0.7, "development": 0.75}
+        for build, cost in BUILD_COSTS.items():
+            if build == "city" and not self.valid_city_vertices(player_index):
+                continue
+            if build == "settlement" and not self.valid_settlement_vertices(player_index):
+                continue
+            if build == "road" and not self.valid_road_edges(player_index):
+                continue
+            if build == "development" and not self.dev_deck:
+                continue
+            missing = max(0, cost.get(resource, 0) - player.resources[resource])
+            value += missing * build_weights[build]
+        if player.resources[resource] == 0:
+            value += 0.55
+        return value
+
+    def _cpu_reachable_vertex_value(self, edge: tuple[int, int]) -> float:
+        best = 0.0
+        for start in edge:
+            for neighbor in self.vertex_neighbors[start]:
+                candidate = tuple(sorted((start, neighbor)))
+                if candidate == edge or self.edges.get(candidate) is not None:
+                    continue
+                if neighbor in self.buildings or any(n in self.buildings for n in self.vertex_neighbors[neighbor]):
+                    continue
+                best = max(best, self._cpu_vertex_value(neighbor, self.current))
+        return best
+
+    def _cpu_pick_robber_move(self) -> tuple[int, int | None]:
+        leader_score = max(self.public_score(i, self.current) for i in range(self.player_count) if i != self.current)
+        best: tuple[float, int, int | None] | None = None
+        for tile in self.tiles:
+            if tile.robber:
+                continue
+            victims = self.robber_victims(tile.hid)
+            victim = max(
+                victims,
+                key=lambda i: (self.public_score(i, self.current), self.players[i].resource_count()),
+                default=None,
+            )
+            value = 0.0
+            for vertex in tile.vertices:
+                building = self.buildings.get(vertex)
+                if not building:
+                    continue
+                multiplier = 2 if building.kind == "city" else 1
+                pips = self._tile_pips(tile.hid) * multiplier
+                if building.owner == self.current:
+                    value -= pips * 1.4
+                else:
+                    score = self.public_score(building.owner, self.current)
+                    value += pips * (1.0 + max(0, score - leader_score + 2) * 0.25)
+            if victim is not None:
+                value += 1.5 + self.players[victim].resource_count() * 0.08
+            candidate = (value + random.random() * 0.01, tile.hid, victim)
+            if best is None or candidate > best:
+                best = candidate
+        assert best is not None
+        return best[1], best[2]
 
 
 class CatanApp(tk.Tk):
@@ -1001,9 +1400,26 @@ class CatanApp(tk.Tk):
         if self.game.phase.startswith("setup"):
             self.game.cpu_take_setup()
         else:
-            self.game.cpu_take_turn()
+            self.game.cpu_take_turn(self._cpu_offer_trade)
         self._refresh()
         self._after_cpu_if_needed()
+
+    def _cpu_offer_trade(self, proposer: int, target: int, offer: dict[str, int], request: dict[str, int]) -> bool:
+        assert self.game
+        giver = self.game.players[proposer]
+        receiver = self.game.players[target]
+        offer_text = self.game._resource_bundle_text(offer)
+        request_text = self.game._resource_bundle_text(request)
+        if receiver.is_cpu:
+            if self.game.cpu_accepts_trade(proposer, target, offer, request):
+                return self.game.player_trade(proposer, target, offer, request)
+            self.game.add_log(f"{receiver.name} declined {giver.name}'s trade.")
+            return False
+        accepted = messagebox.askyesno("Trade Offer", f"{giver.name} offers {offer_text} for {request_text}. Accept?")
+        if accepted and self.game.player_trade(proposer, target, offer, request):
+            return True
+        self.game.add_log(f"{receiver.name} declined {giver.name}'s trade.")
+        return False
 
     def _roll(self) -> None:
         if not self._guard_human_turn() or not self.game:

@@ -33,6 +33,17 @@ def adjacent_hot_numbers(game: CatanGame) -> int:
     return count
 
 
+def card_count_excludes_development_cards() -> None:
+    game = CatanGame(4, 0, [])
+    player = game.players[0]
+    player.resources["brick"] = 2
+    player.resources["grain"] = 1
+    player.dev_cards.extend(["Knight", "Victory Point"])
+    assert player.resource_count() == 3
+    assert player.card_count() == 3
+    assert len(player.dev_cards) == 2
+
+
 def run_game(player_count: int) -> None:
     game = CatanGame(player_count, 0, [])
     while game.phase != "play":
@@ -50,6 +61,7 @@ def run_game(player_count: int) -> None:
 
 
 if __name__ == "__main__":
+    card_count_excludes_development_cards()
     run_game(4)
     run_game(6)
     print("smoke test passed")

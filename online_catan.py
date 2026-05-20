@@ -448,7 +448,19 @@ class OnlineCatan:
             if self.game.phase.startswith("setup"):
                 self.game.cpu_take_setup()
             else:
-                self.game.cpu_take_turn()
+                if not self.game.cpu_take_turn(self._cpu_offer_trade):
+                    break
+
+    def _cpu_offer_trade(self, proposer: int, target: int, offer: dict[str, int], request: dict[str, int]) -> bool | None:
+        g = self.game
+        if g.players[target].is_cpu:
+            if self.cpu_accepts_trade(proposer, target, offer, request):
+                return g.player_trade(proposer, target, offer, request)
+            g.add_log(f"{g.players[target].name} declined {g.players[proposer].name}'s trade.")
+            return False
+        self.pending_trade = {"from": proposer, "to": target, "offer": offer, "request": request}
+        g.add_log(f"{g.players[proposer].name} proposed a trade to {g.players[target].name}.")
+        return None
 
     def _clean_bundle(self, raw: dict) -> dict[str, int]:
         return {r: max(0, int(raw.get(r, 0) or 0)) for r in RESOURCES}
@@ -457,25 +469,7 @@ class OnlineCatan:
         return
 
     def cpu_accepts_trade(self, proposer: int, cpu_index: int, offer: dict[str, int], request: dict[str, int]) -> bool:
-        g = self.game
-        cpu = g.players[cpu_index]
-        if not g._has_resources(cpu, request):
-            return False
-        offer_value = self._trade_bundle_value(cpu_index, offer)
-        request_value = self._trade_bundle_value(cpu_index, request)
-        proposer_score = g.public_score(proposer, cpu_index)
-        cpu_score = g.public_score(cpu_index, cpu_index)
-        difficulty = getattr(cpu, "difficulty", "normal")
-        leader_penalty = 1.0
-        if proposer_score >= cpu_score + 2:
-            leader_penalty += 0.25
-        if proposer_score >= 8:
-            leader_penalty += 0.35
-        margin = 0.2 if difficulty == "easy" else 0.45 if difficulty == "normal" else 0.75
-        margin += max(0, proposer_score - cpu_score) * (0.1 if difficulty == "easy" else 0.18)
-        if difficulty == "easy":
-            return offer_value >= request_value * leader_penalty + margin and sum(offer.values()) >= sum(request.values())
-        return offer_value >= request_value * leader_penalty + margin
+        return self.game.cpu_accepts_trade(proposer, cpu_index, offer, request)
 
     def _trade_bundle_value(self, player_index: int, bundle: dict[str, int]) -> float:
         return sum(amount * self._resource_trade_value(player_index, resource) for resource, amount in bundle.items())
